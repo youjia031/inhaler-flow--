@@ -52,6 +52,8 @@
   .volume-control input[type="range"]{width:60px;height:4px;background:var(--dim);border-radius:2px;padding:0;margin:0;}
   .volume-control input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--gold);cursor:pointer;}
   .vol-icon{font-size:16px;cursor:pointer;}
+  .music-indicator{font-size:11px;color:var(--dim);padding:2px 10px;border-radius:12px;background:var(--track);}
+  .music-progress{font-size:10px;color:var(--dim-lt);padding:2px 6px;}
 </style>
 </head>
 <body>
@@ -60,9 +62,11 @@
     <button id="connectBtn" class="btn-gold btn-md">連接裝置</button>
     <span id="status">未連線 · 可用「↑ ↓ 方向鍵」試玩</span>
     <span class="spacer"></span>
+    <span class="music-indicator" id="musicLabel">🎵 選單音樂</span>
+    <span class="music-progress" id="musicProgress"></span>
     <div class="volume-control">
       <span class="vol-icon" id="muteBtn">🔊</span>
-      <input type="range" id="volumeSlider" min="0" max="100" value="50" />
+      <input type="range" id="volumeSlider" min="0" max="100" value="40" />
     </div>
     <span id="syncStatus"></span>
     <label>姓名 / 編號</label>
@@ -110,24 +114,29 @@ import taiko from "./game_taiko.js";
 const GAMES = { angrybird, balloon, taiko };
 const ONSET = 12;
 
-// ================= 🎵 完整音樂 + 音效系統 =================
+// ================= 🎵 音樂系統（完全獨立，不混雜） =================
 class MusicAndSoundManager {
   constructor() {
     this.ctx = null;
     this.isInitialized = false;
     this.isMuted = false;
-    this.masterVolume = 0.5;
+    this.masterVolume = 0.4;
     this.sfxVolume = 0.8;
-    this.bgmVolume = 0.25;
+    this.bgmVolume = 0.18;
     
-    // BGM 相關
     this.bgmNodes = [];
     this.bgmInterval = null;
     this.currentBgm = null;
     this.isBgmPlaying = false;
+    this.musicLabel = document.getElementById('musicLabel');
+    this.musicProgress = document.getElementById('musicProgress');
+    this.barCount = 0;
+    this.totalBars = 64;
     
-    // 音效快取
-    this.soundCache = new Map();
+    // 彈弓鳥蓄力音效專用
+    this.chargeTone = null;
+    this.chargeGain = null;
+    this.isCharging = false;
   }
 
   async init() {
@@ -144,200 +153,371 @@ class MusicAndSoundManager {
     }
   }
 
-  // ============ 背景音樂 ============
+  // ============ 工具函數 ============
   
-  // 🎵 選單音樂 - 溫暖放鬆的鋼琴曲
+  playChord(notes, dur, type, vol, delay = 0, options = {}) {
+    notes.forEach((freq, i) => {
+      const d = delay + i * 0.03;
+      const t = Array.isArray(type) ? type[i % type.length] : type;
+      const v = vol * (0.8 - i * 0.12);
+      setTimeout(() => {
+        this.playTone(freq, dur, t, v, options);
+      }, d * 1000);
+    });
+  }
+
+  playBass(freq, dur, vol, delay = 0) {
+    setTimeout(() => {
+      this.playTone(freq, dur, 'sawtooth', vol * 0.5);
+    }, delay * 1000);
+  }
+
+  playDrum(freq, dur, vol, delay = 0, type = 'square') {
+    setTimeout(() => {
+      this.playTone(freq, dur, type, vol);
+    }, delay * 1000);
+  }
+
+  // ============ 🎵 1. 選單音樂（獨立，約90秒） ============
   playMenuMusic() {
     this.stopBgm();
     if (this.isMuted) return;
-    
-    const melody = [
-      // 簡單的 C 大調分解和弦 + 旋律
-      { notes: [523, 659, 784], dur: 0.4 },  // C E G
-      { notes: [587, 740, 880], dur: 0.4 },  // D F A
-      { notes: [659, 784, 988], dur: 0.4 },  // E G B
-      { notes: [523, 659, 880], dur: 0.5 },  // C E A
-      { notes: [493, 659, 784], dur: 0.4 },  // B E G
-      { notes: [523, 659, 784], dur: 0.4 },  // C E G
-      { notes: [587, 740, 880], dur: 0.4 },  // D F A
-      { notes: [523, 659, 880], dur: 0.6 },  // C E A (結尾)
+    this.musicLabel.textContent = '🎵 寧靜冥想';
+    this.barCount = 0;
+    this.totalBars = 72;
+
+    const chords = [
+      { notes: [523, 659, 784], bass: 130 },
+      { notes: [587, 740, 880], bass: 146 },
+      { notes: [587, 740, 880], bass: 146 },
+      { notes: [659, 784, 988], bass: 164 },
+      { notes: [523, 659, 784], bass: 130 },
+      { notes: [587, 740, 880], bass: 146 },
+      { notes: [659, 784, 988], bass: 164 },
+      { notes: [523, 659, 880], bass: 130 },
     ];
-    
+
+    const melodyA = [
+      [523, 659, 784, 0], [587, 740, 880, 0], [659, 784, 988, 0], [523, 659, 880, 0],
+      [494, 659, 784, 0], [523, 659, 784, 0], [587, 740, 880, 0], [523, 659, 880, 0],
+    ];
+
+    const melodyB = [
+      [659, 784, 988, 0], [587, 740, 880, 0], [523, 659, 784, 0], [494, 659, 784, 0],
+      [523, 659, 880, 0], [659, 784, 988, 0], [587, 740, 880, 0], [523, 659, 880, 0],
+    ];
+
+    const melodyC = [
+      [784, 988, 1175, 0], [880, 1047, 1319, 0], [784, 988, 1175, 0], [659, 784, 988, 0],
+      [523, 659, 880, 0], [659, 784, 988, 0], [880, 1047, 1319, 0], [784, 988, 1175, 0],
+    ];
+
+    const melodyCoda = [
+      [523, 659, 784, 0], [587, 740, 880, 0], [659, 784, 988, 0], [523, 659, 880, 0],
+    ];
+
+    let section = 'A';
+    const BPM = 70;
+    const barDuration = 60 / BPM * 4;
+
     this.currentBgm = 'menu';
     this.isBgmPlaying = true;
-    let noteIndex = 0;
-    
+
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      const phrase = melody[noteIndex % melody.length];
-      const vol = this.bgmVolume * this.masterVolume * 0.15;
       
-      // 同時演奏多個音（和弦）
-      phrase.notes.forEach((freq, i) => {
-        const delay = i * 0.02;
-        setTimeout(() => {
-          this.playTone(freq, phrase.dur, 'sine', vol * (1 - i * 0.2));
-        }, delay * 1000);
-      });
+      const vol = this.bgmVolume * this.masterVolume * 0.12;
+      const bar = this.barCount % this.totalBars;
       
-      noteIndex++;
-      if (noteIndex >= melody.length) noteIndex = 0;
-    }, 900);
+      let melody;
+      if (bar < 32) { melody = melodyA; section = 'A'; }
+      else if (bar < 56) { melody = melodyB; section = 'B'; }
+      else if (bar < 68) { melody = melodyC; section = 'C'; }
+      else { melody = melodyCoda; section = '尾奏'; }
+
+      const chord = chords[bar % chords.length];
+      const mel = melody[bar % melody.length];
+
+      this.playChord(chord.notes, barDuration * 0.6, 'sine', vol * 0.7, 0);
+      this.playBass(chord.bass, barDuration * 0.8, vol * 0.5, 0.05);
+
+      const melNotes = mel.filter(n => n > 0);
+      if (melNotes.length > 0) {
+        this.playChord(melNotes, barDuration * 0.4, 'triangle', vol * 0.5, 0.15);
+      }
+
+      if (bar % 4 === 0) this.playTone(1047, 0.2, 'sine', vol * 0.15);
+      if (bar % 8 === 0) {
+        this.playTone(1319, 0.15, 'sine', vol * 0.1);
+        this.playTone(1568, 0.15, 'sine', vol * 0.08);
+      }
+
+      this.barCount++;
+      const progress = Math.round((this.barCount / this.totalBars) * 100);
+      this.musicProgress.textContent = `${progress}% · ${section}`;
+      if (this.barCount >= this.totalBars) this.barCount = 0;
+    }, barDuration * 1000);
   }
 
-  // 🎵 彈弓鳥 - 史詩冒險風
+  // ============ 🎵 2. 彈弓鳥音樂（獨立，約80秒） ============
   playAngrybirdMusic() {
     this.stopBgm();
     if (this.isMuted) return;
-    
-    const melody = [
-      { notes: [392, 523, 659], dur: 0.3 },  // G C E
-      { notes: [440, 587, 740], dur: 0.3 },  // A D F
-      { notes: [523, 659, 880], dur: 0.3 },  // C E A
-      { notes: [392, 523, 784], dur: 0.4 },  // G C G
-      { notes: [349, 523, 659], dur: 0.3 },  // F C E
-      { notes: [440, 587, 740], dur: 0.3 },  // A D F
-      { notes: [523, 659, 880], dur: 0.3 },  // C E A
-      { notes: [392, 523, 880], dur: 0.5 },  // G C A (結尾)
+    this.musicLabel.textContent = '🎵 史詩戰鬥';
+    this.barCount = 0;
+    this.totalBars = 64;
+
+    const chords = [
+      { notes: [392, 523, 659], bass: 98 },
+      { notes: [440, 587, 740], bass: 110 },
+      { notes: [523, 659, 880], bass: 130 },
+      { notes: [392, 523, 784], bass: 98 },
+      { notes: [349, 523, 659], bass: 87 },
+      { notes: [440, 587, 740], bass: 110 },
+      { notes: [523, 659, 880], bass: 130 },
+      { notes: [392, 523, 880], bass: 98 },
     ];
-    
+
+    const themeA = [
+      [392, 523, 659], [523, 659, 784], [440, 587, 740], [587, 740, 880],
+      [392, 523, 784], [523, 659, 880], [440, 587, 740], [392, 523, 659],
+    ];
+
+    const themeB = [
+      [349, 523, 659], [523, 659, 784], [440, 587, 740], [587, 740, 880],
+      [523, 659, 880], [659, 784, 988], [392, 523, 784], [523, 659, 880],
+    ];
+
+    const themeC = [
+      [523, 784, 1047], [587, 880, 1175], [659, 988, 1319], [784, 1047, 1568],
+      [659, 988, 1319], [587, 880, 1175], [523, 784, 1047], [659, 988, 1319],
+    ];
+
+    let section = 'A';
+    const BPM = 120;
+    const barDuration = 60 / BPM * 4;
+
     this.currentBgm = 'angrybird';
     this.isBgmPlaying = true;
-    let noteIndex = 0;
-    
-    // 加入低音節奏
+
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      const phrase = melody[noteIndex % melody.length];
-      const vol = this.bgmVolume * this.masterVolume * 0.12;
       
-      // 和弦
-      phrase.notes.forEach((freq, i) => {
-        const delay = i * 0.025;
-        const type = i === 0 ? 'square' : 'sine';
-        setTimeout(() => {
-          this.playTone(freq, phrase.dur, type, vol * (1 - i * 0.15));
-        }, delay * 1000);
-      });
+      const vol = this.bgmVolume * this.masterVolume * 0.10;
+      const bar = this.barCount % this.totalBars;
       
-      // 低音鼓點（每兩個小節）
-      if (noteIndex % 2 === 0) {
-        setTimeout(() => {
-          this.playTone(80, 0.2, 'sawtooth', vol * 0.5);
-        }, 50);
+      let theme, chordIdx;
+      if (bar < 24) { theme = themeA; chordIdx = bar % chords.length; section = 'A'; }
+      else if (bar < 48) { theme = themeB; chordIdx = (bar + 2) % chords.length; section = 'B'; }
+      else { theme = themeC; chordIdx = (bar + 4) % chords.length; section = 'C'; }
+
+      const chord = chords[chordIdx % chords.length];
+      const mel = theme[bar % theme.length];
+
+      this.playChord(chord.notes, barDuration * 0.7, 'sine', vol * 0.5, 0);
+      this.playBass(chord.bass, barDuration * 0.9, vol * 0.4, 0.05);
+      this.playChord(mel, barDuration * 0.5, 'square', vol * 0.6, 0.12);
+
+      if (bar % 2 === 0) {
+        this.playDrum(65, 0.2, vol * 0.8, 0.02, 'sawtooth');
+        this.playDrum(55, 0.15, vol * 0.5, 0.12, 'sawtooth');
       }
-      
-      noteIndex++;
-      if (noteIndex >= melody.length) noteIndex = 0;
-    }, 700);
+      if (bar % 4 === 0) {
+        this.playDrum(80, 0.18, vol * 0.6, 0.06, 'sawtooth');
+        this.playDrum(95, 0.12, vol * 0.4, 0.15, 'square');
+      }
+      if (bar % 8 === 0) this.playTone(120, 0.3, 'sawtooth', vol * 0.2);
+
+      this.barCount++;
+      const progress = Math.round((this.barCount / this.totalBars) * 100);
+      this.musicProgress.textContent = `${progress}% · ${section}`;
+      if (this.barCount >= this.totalBars) this.barCount = 0;
+    }, barDuration * 1000);
   }
 
-  // 🎵 吹氣球 - 輕快歡樂風
+  // ============ 🎵 3. 吹氣球音樂（獨立，約70秒） ============
   playBalloonMusic() {
     this.stopBgm();
     if (this.isMuted) return;
-    
-    const melody = [
-      { notes: [523, 659, 784], dur: 0.25 },  // C E G
-      { notes: [587, 740, 880], dur: 0.25 },  // D F A
-      { notes: [659, 784, 988], dur: 0.25 },  // E G B
-      { notes: [784, 988, 1175], dur: 0.25 }, // G B D
-      { notes: [880, 1047, 1319], dur: 0.25 },// A C E
-      { notes: [784, 988, 1175], dur: 0.25 }, // G B D
-      { notes: [659, 784, 988], dur: 0.25 },  // E G B
-      { notes: [523, 659, 880], dur: 0.4 },   // C E A (結尾)
+    this.musicLabel.textContent = '🎵 歡樂馬戲團';
+    this.barCount = 0;
+    this.totalBars = 56;
+
+    const chords = [
+      { notes: [523, 659, 784], bass: 130 },
+      { notes: [587, 740, 880], bass: 146 },
+      { notes: [659, 784, 988], bass: 164 },
+      { notes: [784, 988, 1175], bass: 196 },
+      { notes: [880, 1047, 1319], bass: 220 },
+      { notes: [784, 988, 1175], bass: 196 },
+      { notes: [659, 784, 988], bass: 164 },
+      { notes: [523, 659, 880], bass: 130 },
     ];
-    
+
+    const themeA = [
+      [523, 659, 784], [587, 740, 880], [659, 784, 988], [784, 988, 1175],
+      [880, 1047, 1319], [784, 988, 1175], [659, 784, 988], [523, 659, 880],
+    ];
+
+    const themeB = [
+      [523, 784, 1047], [587, 880, 1175], [659, 988, 1319], [784, 1047, 1568],
+      [880, 1175, 1760], [784, 1047, 1568], [659, 988, 1319], [523, 659, 880],
+    ];
+
+    const themeC = [
+      [523, 587, 659, 784, 880, 988, 1047, 1175],
+      [659, 784, 880, 988, 1047, 1175, 1319, 1568],
+      [523, 659, 784, 988, 1047, 1319, 1568, 1760],
+      [659, 784, 988, 1047, 1319, 1568, 1760, 1976],
+    ];
+
+    let section = 'A';
+    const BPM = 130;
+    const barDuration = 60 / BPM * 4;
+
     this.currentBgm = 'balloon';
     this.isBgmPlaying = true;
-    let noteIndex = 0;
-    
+
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      const phrase = melody[noteIndex % melody.length];
-      const vol = this.bgmVolume * this.masterVolume * 0.13;
       
-      phrase.notes.forEach((freq, i) => {
-        const delay = i * 0.03;
-        const type = i % 2 === 0 ? 'sine' : 'triangle';
-        setTimeout(() => {
-          this.playTone(freq, phrase.dur, type, vol * (1 - i * 0.15));
-        }, delay * 1000);
-      });
+      const vol = this.bgmVolume * this.masterVolume * 0.12;
+      const bar = this.barCount % this.totalBars;
       
-      noteIndex++;
-      if (noteIndex >= melody.length) noteIndex = 0;
-    }, 550);
+      let theme, chordIdx;
+      if (bar < 24) { theme = themeA; chordIdx = bar % chords.length; section = 'A'; }
+      else if (bar < 44) { theme = themeB; chordIdx = (bar + 2) % chords.length; section = 'B'; }
+      else { theme = themeC; chordIdx = (bar + 4) % chords.length; section = 'C'; }
+
+      const chord = chords[chordIdx % chords.length];
+      const mel = theme[bar % theme.length];
+
+      this.playChord(chord.notes, barDuration * 0.5, 'triangle', vol * 0.5, 0);
+      this.playBass(chord.bass, barDuration * 0.7, vol * 0.3, 0.05);
+
+      if (Array.isArray(mel)) {
+        this.playChord(mel, barDuration * 0.35, 'sine', vol * 0.5, 0.1, { vibrato: true, vibratoSpeed: 6, vibratoAmount: 3 });
+      }
+
+      if (bar % 2 === 0) this.playTone(1319, 0.06, 'sine', vol * 0.2);
+      if (bar % 3 === 0) {
+        this.playTone(1568, 0.06, 'sine', vol * 0.15);
+        this.playTone(1760, 0.06, 'sine', vol * 0.12);
+      }
+      if (bar % 4 === 0) this.playTone(1976, 0.08, 'sine', vol * 0.1);
+      if (bar % 2 === 0) this.playDrum(130, 0.2, vol * 0.3, 0.01, 'sawtooth');
+
+      this.barCount++;
+      const progress = Math.round((this.barCount / this.totalBars) * 100);
+      this.musicProgress.textContent = `${progress}% · ${section}`;
+      if (this.barCount >= this.totalBars) this.barCount = 0;
+    }, barDuration * 1000);
   }
 
-  // 🎵 呼吸太鼓 - 和風節奏
+  // ============ 🎵 4. 太鼓音樂（獨立，約75秒） ============
   playTaikoMusic() {
     this.stopBgm();
     if (this.isMuted) return;
-    
-    const melody = [
-      { notes: [294, 392, 523], dur: 0.2 },  // D G C
-      { notes: [330, 440, 587], dur: 0.2 },  // E A D
-      { notes: [392, 523, 659], dur: 0.2 },  // G C E
-      { notes: [294, 392, 659], dur: 0.3 },  // D G E
-      { notes: [262, 392, 523], dur: 0.2 },  // C G C
-      { notes: [330, 440, 587], dur: 0.2 },  // E A D
-      { notes: [392, 523, 659], dur: 0.2 },  // G C E
-      { notes: [294, 392, 659], dur: 0.4 },  // D G E (結尾)
+    this.musicLabel.textContent = '🎵 日本祭典';
+    this.barCount = 0;
+    this.totalBars = 60;
+
+    const pentatonic = [294, 330, 392, 440, 494];
+    const chords = [
+      { notes: [294, 392, 440], bass: 73 },
+      { notes: [330, 440, 494], bass: 82 },
+      { notes: [392, 494, 294], bass: 98 },
+      { notes: [440, 294, 330], bass: 110 },
+      { notes: [294, 392, 494], bass: 73 },
+      { notes: [330, 440, 294], bass: 82 },
+      { notes: [392, 494, 440], bass: 98 },
+      { notes: [294, 440, 494], bass: 73 },
     ];
-    
+
+    const themeA = [
+      [0, 2, 4], [1, 3, 0], [2, 4, 1], [0, 2, 3],
+      [4, 2, 0], [3, 1, 4], [2, 4, 0], [0, 2, 4],
+    ];
+
+    const themeB = [
+      [3, 0, 2], [4, 1, 3], [2, 4, 0], [1, 3, 4],
+      [0, 4, 2], [4, 0, 1], [3, 2, 4], [0, 2, 4],
+    ];
+
+    const themeC = [
+      [0, 2, 4, 0], [1, 3, 0, 2], [2, 4, 1, 3], [0, 2, 3, 4],
+      [4, 2, 0, 1], [3, 1, 4, 2], [2, 4, 0, 3], [0, 2, 4, 0],
+    ];
+
+    let section = 'A';
+    const BPM = 140;
+    const barDuration = 60 / BPM * 4;
+
     this.currentBgm = 'taiko';
     this.isBgmPlaying = true;
-    let noteIndex = 0;
-    let drumCount = 0;
-    
+
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      const phrase = melody[noteIndex % melody.length];
+      
       const vol = this.bgmVolume * this.masterVolume * 0.10;
+      const bar = this.barCount % this.totalBars;
       
-      // 旋律
-      phrase.notes.forEach((freq, i) => {
-        const delay = i * 0.02;
-        const type = i === 1 ? 'square' : 'sine';
-        setTimeout(() => {
-          this.playTone(freq, phrase.dur, type, vol * (1 - i * 0.15));
-        }, delay * 1000);
-      });
-      
-      // 太鼓節奏（每拍）
-      drumCount++;
-      if (drumCount % 2 === 0) {
-        setTimeout(() => {
-          this.playTone(120, 0.15, 'square', vol * 0.6);
-        }, 30);
-        setTimeout(() => {
-          this.playTone(80, 0.1, 'sawtooth', vol * 0.3);
-        }, 80);
+      let theme, chordIdx;
+      if (bar < 24) { theme = themeA; chordIdx = bar % chords.length; section = 'A'; }
+      else if (bar < 44) { theme = themeB; chordIdx = (bar + 2) % chords.length; section = 'B'; }
+      else { theme = themeC; chordIdx = (bar + 4) % chords.length; section = 'C'; }
+
+      const chord = chords[chordIdx % chords.length];
+      const mel = theme[bar % theme.length];
+
+      const chordNotes = chord.notes.map(n => n);
+      this.playChord(chordNotes, barDuration * 0.6, 'sawtooth', vol * 0.4, 0, { vibrato: true, vibratoSpeed: 7, vibratoAmount: 4 });
+      this.playBass(chord.bass, barDuration * 0.8, vol * 0.4, 0.05);
+
+      if (Array.isArray(mel)) {
+        const melNotes = mel.map(p => pentatonic[p % pentatonic.length]);
+        this.playChord(melNotes, barDuration * 0.4, 'sawtooth', vol * 0.5, 0.1, { vibrato: true, vibratoSpeed: 6, vibratoAmount: 3 });
       }
-      
-      noteIndex++;
-      if (noteIndex >= melody.length) noteIndex = 0;
-    }, 450);
+
+      if (bar % 2 === 0) {
+        this.playDrum(75, 0.25, vol * 0.7, 0.01, 'square');
+        this.playDrum(140, 0.1, vol * 0.4, 0.06, 'square');
+        this.playDrum(105, 0.15, vol * 0.35, 0.11, 'sawtooth');
+      } else {
+        this.playDrum(120, 0.08, vol * 0.25, 0.03, 'square');
+        this.playDrum(90, 0.06, vol * 0.2, 0.08, 'square');
+      }
+
+      if (bar % 4 === 0) {
+        this.playDrum(55, 0.3, vol * 0.5, 0.15, 'sawtooth');
+        this.playDrum(165, 0.15, vol * 0.3, 0.25, 'square');
+        this.playDrum(185, 0.12, vol * 0.25, 0.32, 'square');
+      }
+      if (bar % 8 === 0) {
+        this.playDrum(60, 0.4, vol * 0.4, 0.2, 'sawtooth');
+        this.playDrum(200, 0.1, vol * 0.2, 0.35, 'square');
+      }
+
+      this.barCount++;
+      const progress = Math.round((this.barCount / this.totalBars) * 100);
+      this.musicProgress.textContent = `${progress}% · ${section}`;
+      if (this.barCount >= this.totalBars) this.barCount = 0;
+    }, barDuration * 1000);
   }
 
-  // 播放背景音樂（根據遊戲）
+  // ============ 播放控制 ============
+  
   playBgm(style = 'menu') {
+    // 完全停止當前的音樂
+    this.stopBgm();
+    
+    // 根據風格播放完全獨立的音樂
     switch(style) {
-      case 'menu':
-        this.playMenuMusic();
-        break;
-      case 'angrybird':
-        this.playAngrybirdMusic();
-        break;
-      case 'balloon':
-        this.playBalloonMusic();
-        break;
-      case 'taiko':
-        this.playTaikoMusic();
-        break;
-      default:
-        this.playMenuMusic();
+      case 'menu': this.playMenuMusic(); break;
+      case 'angrybird': this.playAngrybirdMusic(); break;
+      case 'balloon': this.playBalloonMusic(); break;
+      case 'taiko': this.playTaikoMusic(); break;
+      default: this.playMenuMusic();
     }
   }
 
@@ -347,11 +527,82 @@ class MusicAndSoundManager {
       clearInterval(this.bgmInterval);
       this.bgmInterval = null;
     }
-    // 清空所有正在播放的音符
     this.bgmNodes.forEach(node => {
       try { node.stop(); } catch(e) {}
     });
     this.bgmNodes = [];
+    this.musicProgress.textContent = '';
+  }
+
+  // ============ 彈弓鳥蓄力音效（漸強式，不重疊） ============
+  startCharge() {
+    if (this.isCharging) return;
+    if (this.isMuted || !this.isInitialized) return;
+    
+    try {
+      this.isCharging = true;
+      this.chargeTone = this.ctx.createOscillator();
+      this.chargeGain = this.ctx.createGain();
+      
+      this.chargeTone.type = 'sawtooth';
+      this.chargeTone.frequency.setValueAtTime(200, this.ctx.currentTime);
+      
+      // 初始音量很小
+      this.chargeGain.gain.setValueAtTime(0.001, this.ctx.currentTime);
+      
+      this.chargeTone.connect(this.chargeGain);
+      this.chargeGain.connect(this.ctx.destination);
+      this.chargeTone.start();
+      
+      // 儲存開始時間，用於漸強
+      this.chargeStartTime = this.ctx.currentTime;
+      this.chargeTargetVolume = 0.15 * this.sfxVolume * this.masterVolume;
+      
+    } catch(e) {
+      console.warn('蓄力音效啟動失敗:', e);
+    }
+  }
+
+  updateCharge(flow) {
+    if (!this.isCharging || !this.chargeGain) return;
+    if (this.isMuted) return;
+    
+    try {
+      // 根據流速計算音量 (0~1)
+      const maxFlow = 150;
+      const ratio = Math.min(1, flow / maxFlow);
+      const volume = 0.001 + ratio * this.chargeTargetVolume;
+      
+      // 平滑變化
+      this.chargeGain.gain.setValueAtTime(volume, this.ctx.currentTime);
+      
+      // 頻率也隨著力道變高 (200Hz -> 600Hz)
+      const freq = 200 + ratio * 400;
+      this.chargeTone.frequency.setValueAtTime(freq, this.ctx.currentTime);
+      
+    } catch(e) {
+      // 靜默處理
+    }
+  }
+
+  stopCharge() {
+    if (!this.isCharging) return;
+    this.isCharging = false;
+    
+    try {
+      if (this.chargeGain) {
+        // 快速淡出
+        this.chargeGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
+      }
+      if (this.chargeTone) {
+        this.chargeTone.stop(this.ctx.currentTime + 0.06);
+      }
+    } catch(e) {
+      // 靜默處理
+    }
+    
+    this.chargeTone = null;
+    this.chargeGain = null;
   }
 
   // ============ 音效 ============
@@ -384,7 +635,6 @@ class MusicAndSoundManager {
       osc.start();
       osc.stop(this.ctx.currentTime + duration);
       
-      // 記錄節點以便清理
       if (this.isBgmPlaying) {
         this.bgmNodes.push(osc);
         setTimeout(() => {
@@ -395,8 +645,22 @@ class MusicAndSoundManager {
   }
 
   play(event, extra = {}) {
+    // 如果是彈弓鳥的蓄力相關事件，用特殊處理
+    if (event === 'charge_start') {
+      this.startCharge();
+      return;
+    }
+    if (event === 'charge_update' && extra.flow !== undefined) {
+      this.updateCharge(extra.flow);
+      return;
+    }
+    if (event === 'charge_stop') {
+      this.stopCharge();
+      return;
+    }
+
+    // 一般音效
     const sounds = {
-      // 系統音效
       'connect': () => { this.playTone(523, 0.1, 'sine', 0.3); 
                          setTimeout(() => this.playTone(659, 0.1, 'sine', 0.25), 100); },
       'disconnect': () => this.playTone(440, 0.15, 'sawtooth', 0.2),
@@ -408,7 +672,6 @@ class MusicAndSoundManager {
       'click': () => this.playTone(880, 0.05, 'sine', 0.15),
       'error': () => this.playTone(220, 0.3, 'sawtooth', 0.2),
       
-      // 通用遊戲音效
       'success': () => { this.playTone(880, 0.15, 'sine', 0.4);
                          setTimeout(() => this.playTone(1100, 0.1, 'sine', 0.3), 120); },
       'fail': () => this.playTone(220, 0.4, 'sawtooth', 0.2),
@@ -422,17 +685,16 @@ class MusicAndSoundManager {
                           setTimeout(() => this.playTone(784, 0.15, 'sine', 0.3), 200);
                           setTimeout(() => this.playTone(1047, 0.2, 'sine', 0.3), 300); },
       
-      // 彈弓鳥專屬
-      'angrybird_launch_small': () => this.playTone(600, 0.2, 'sine', 0.2, {vibrato:true}),
-      'angrybird_launch_medium': () => this.playTone(500, 0.4, 'sine', 0.25, {vibrato:true}),
-      'angrybird_launch_big': () => { this.playTone(400, 0.6, 'sine', 0.3, {vibrato:true});
-                                       setTimeout(() => this.playTone(200, 0.3, 'sawtooth', 0.3), 500); },
+      // 彈弓鳥發射音效（短促，不重疊）
+      'angrybird_launch': () => { 
+        this.playTone(400, 0.3, 'sawtooth', 0.3);
+        setTimeout(() => this.playTone(300, 0.2, 'sawtooth', 0.2), 150);
+      },
       'angrybird_wall': () => { this.playTone(100, 0.5, 'sawtooth', 0.4);
                                 for(let i=0; i<5; i++) {
                                   setTimeout(() => this.playTone(300+Math.random()*200, 0.05, 'sine', 0.1), i*80);
                                 } },
       
-      // 氣球專屬
       'balloon_pop': () => this.playTone(1200, 0.05, 'sine', 0.2),
       'balloon_fly': () => { this.playTone(800, 0.1, 'sine', 0.2);
                              setTimeout(() => this.playTone(1000, 0.1, 'sine', 0.2), 100);
@@ -440,7 +702,6 @@ class MusicAndSoundManager {
       'balloon_deflate': () => this.playTone(300, 0.5, 'sawtooth', 0.15),
       'balloon_90': () => this.playTone(440, 0.08, 'square', 0.15),
       
-      // 太鼓專屬
       'taiko_great': () => { this.playTone(150, 0.1, 'square', 0.4);
                              setTimeout(() => this.playTone(200, 0.1, 'square', 0.3), 80); },
       'taiko_good': () => this.playTone(150, 0.15, 'square', 0.3),
@@ -463,8 +724,9 @@ class MusicAndSoundManager {
     this.isMuted = !this.isMuted;
     if (this.isMuted) {
       this.stopBgm();
+      this.stopCharge();
+      this.musicLabel.textContent = '🔇 靜音';
     } else {
-      // 恢復播放
       if (this.currentBgm) {
         this.playBgm(this.currentBgm);
       }
@@ -642,14 +904,14 @@ function startGame(id){
   segSamples=[];
   
   sound.play('game_start');
-  sound.playBgm(id);  // ✅ 播放對應的音樂
+  sound.playBgm(id);  // 完全獨立的音樂
   uploadLog({ type:"game_start", game:id });
 }
 
 function toHub(){
   sound.play('back_menu');
   sound.stopBgm();
-  sound.playBgm('menu');  // ✅ 選單音樂
+  sound.playBgm('menu');  // 選單音樂
   current=null; 
   currentId=null; 
   hub.style.display="flex"; 
@@ -769,7 +1031,6 @@ muteBtn.onclick = () => {
 
 setStatus(`未連線 · 可用方向鍵試玩 · ${algoStatus()}`,"");
 
-// ✅ 初始化並播放選單音樂
 sound.init().then(() => {
   sound.playBgm('menu');
 });
