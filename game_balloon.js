@@ -6,10 +6,22 @@ let S;
 function reset(api){
   S = { size:0, flew:false, flyY:0, success:api.store.get("balloon_best",0),
     inBand:0, fb:"深吸一口氣，穩穩地把氣吐出去～", fbCol:api.colors.cream,
-    steadyBonus:0, wrong:false, sparkle:[], hue:0, running:true };
+    steadyBonus:0, wrong:false, sparkle:[], hue:0, running:true,
+    sound: api.sound, // 保存音效引用
+  };
 }
+
+function getScore() {
+  return S ? S.success : 0;
+}
+
 function primaryLabel(){ return "換一顆氣球"; }
-function primary(api){ const b=S.success; reset(api); S.success=b; }
+function primary(api){ 
+  const b=S.success; 
+  reset(api); 
+  S.success=b;
+  if (S.sound) S.sound.play('click');
+}
 
 function update(dt, input, api){
   // 只吃吐氣
@@ -26,17 +38,47 @@ function update(dt, input, api){
     // 力道越大脹越快:在 LO~HI 之間,線性內插 FILL_BASE ~ FILL_MAX,超過 HI 就固定用 FILL_MAX(不再懲罰太用力)
     const t = Math.max(0, Math.min(1, (flow-P.LO)/(P.HI-P.LO)));
     const rate = P.FILL_BASE + (P.FILL_MAX-P.FILL_BASE)*t;
-    S.size=Math.min(1, S.size + rate*dt); S.inBand+=dt;
+    const oldSize = S.size;
+    S.size=Math.min(1, S.size + rate*dt); 
+    S.inBand+=dt;
     S.fb = t<0.3? "很好，繼續吹～" : t<0.7? "力道不錯，氣球快脹滿了！" : "全力衝刺！快好了！";
     S.fbCol=api.colors.green;
+    
+    // 每10%進度觸發音效
+    if (S.sound && Math.floor(S.size * 10) > Math.floor(oldSize * 10)) {
+      if (S.size >= 0.9) {
+        S.sound.play('balloon_90');
+      } else {
+        S.sound.play('balloon_pop');
+      }
+    }
   }
-  else { S.size=Math.max(0, S.size - P.LEAK*dt); if(flow>0){ S.inBand=0; S.fb="再吹強一點，氣球才會脹～"; S.fbCol=api.colors.cream; } }
+  else { 
+    S.size=Math.max(0, S.size - P.LEAK*dt); 
+    if(flow>0){ S.inBand=0; S.fb="再吹強一點，氣球才會脹～"; S.fbCol=api.colors.cream; } 
+  }
 
   S.hue=(S.hue+dt*40)%360;
   // 吹滿且穩住 -> 放飛
   if(S.size>=0.999){
-    S.flew=true; S.flyY=0; S.success+=1; api.store.set("balloon_best",Math.max(S.success, api.store.get("balloon_best",0)));
-    S.fb="放飛成功！太棒了 🎉"; S.fbCol=api.colors.gold;
+    S.flew=true; S.flyY=0; 
+    S.success+=1; 
+    const best = api.store.get("balloon_best",0);
+    api.store.set("balloon_best",Math.max(S.success, best));
+    S.fb="放飛成功！太棒了 🎉"; 
+    S.fbCol=api.colors.gold;
+    
+    // 音效：放飛 + 里程碑
+    if (S.sound) {
+      S.sound.play('balloon_fly');
+      if (S.success === 1 || S.success % 5 === 0) {
+        S.sound.play('level_up');
+      }
+      if (S.success > best) {
+        S.sound.play('record_break');
+      }
+    }
+    
     for(let i=0;i<28;i++){ S.sparkle.push({x:(Math.random()*2-1),y:0,life:0.8+Math.random()*0.6,
       col:[api.colors.gold,api.colors.redBr,api.colors.green,api.colors.blue][i%4],sz:3+Math.random()*4}); }
   }
@@ -92,4 +134,4 @@ function render(g,w,h,api){
   g.text(`力道 ${Math.round(S.liveFlow||0)}`,cx,groundY+20,15,C.cream);
 }
 
-export default { title:"吹氣球", reset, primaryLabel, primary, update, render };
+export default { title:"吹氣球", reset, getScore, primaryLabel, primary, update, render };
