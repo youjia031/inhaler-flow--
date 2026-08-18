@@ -37,8 +37,14 @@ function reset(api){
     msg: "深吸一口氣，用最大的力氣打倒城牆！",
     msgCol: api.colors.cream,
     shake: 0,
+    sound: api.sound, // 保存音效引用
   };
 }
+
+function getScore() {
+  return S ? S.score : 0;
+}
+
 function primaryLabel(){
   return S.phase==="result" ? "再射一次" : "";
 }
@@ -48,6 +54,7 @@ function primary(api){
   S.msg="深吸一口氣，用最大的力氣打倒城牆！"; S.msgCol=api.colors.cream;
   S.round += 1;
   if(S.wallBroken) S.wallBroken=false; // 重新蓋一面牆
+  if (S.sound) S.sound.play('click');
 }
 
 function tierOf(power){
@@ -62,6 +69,13 @@ function launch(api){
   S.animT = 0;
   S.phase = "flight";
   S.trail = [];
+  
+  // 發射音效
+  if (S.sound) {
+    if (S.tier === 'big') S.sound.play('angrybird_launch_big');
+    else if (S.tier === 'medium') S.sound.play('angrybird_launch_medium');
+    else S.sound.play('angrybird_launch_small');
+  }
 }
 
 // 二次貝茲曲線,算固定動畫路徑上某個進度 t(0~1) 的座標
@@ -79,13 +93,20 @@ function update(dt, input, api){
   if(S.phase==="aim"){
     if(input.direction==="inhalation" && input.flow>P.ONSET){
       S.liveFlow = input.flow;
+      const oldPeak = S.peak;
       S.peak = Math.max(S.peak, input.flow); // 只記錄這口氣的最高瞬間值,不做時間累積
       const pct = Math.round(Math.min(1,S.peak/P.REF_MAX)*100);
       S.msg = pct<40? "吸氣中…用最大的力氣吸！" : pct<85? "快到了！再吸大力一點！" : "力道足夠了！鬆口氣發射！";
       S.msgCol = api.colors.gold;
+      
+      // 力道達標時播放音效
+      if (S.sound && pct >= 85 && oldPeak < P.REF_MAX * 0.85) {
+        S.sound.play('breath_strong');
+      }
     } else if(input.direction==="exhalation" && input.flow>P.ONSET){
       S.wrong = true;
       S.msg = "這款要用「吸氣」喔～"; S.msgCol=api.colors.gold;
+      if (S.sound) S.sound.play('error');
     } else {
       if(S.peak > 0.01) launch(api);
     }
@@ -111,15 +132,31 @@ function update(dt, input, api){
     if(t >= 1){
       if(S.tier==="big"){
         S.wallBroken = true;
-        S.score += P.WALL.pts; api.store.set("angrybird_score", S.score);
-        S.best = Math.max(S.best, P.WALL.pts); api.store.set("angrybird_best", S.best);
+        S.score += P.WALL.pts; 
+        api.store.set("angrybird_score", S.score);
+        const oldBest = S.best;
+        S.best = Math.max(S.best, P.WALL.pts); 
+        api.store.set("angrybird_best", S.best);
         S.shake = 1;
         spawnRubble(w*cfg.endXR, groundY - h*P.WALL.heightRatio, h);
-        S.msg = `轟！城牆倒了！+${P.WALL.pts} 分`; S.msgCol=api.colors.gold;
+        S.msg = `轟！城牆倒了！+${P.WALL.pts} 分`; 
+        S.msgCol=api.colors.gold;
+        
+        // 音效：城牆倒塌 + 破紀錄
+        if (S.sound) {
+          S.sound.play('angrybird_wall');
+          if (S.best > oldBest) {
+            S.sound.play('record_break');
+          }
+        }
       } else if(S.tier==="medium"){
-        S.msg = "力道普通，飛到半路就掉下來了，再吸大力一點！"; S.msgCol=api.colors.cream;
+        S.msg = "力道普通，飛到半路就掉下來了，再吸大力一點！"; 
+        S.msgCol=api.colors.cream;
+        if (S.sound) S.sound.play('fail');
       } else {
-        S.msg = "力道太小，只飛了一點點～再吸更用力一點！"; S.msgCol=api.colors.cream;
+        S.msg = "力道太小，只飛了一點點～再吸更用力一點！"; 
+        S.msgCol=api.colors.cream;
+        if (S.sound) S.sound.play('fail');
       }
       S.phase = "result";
     }
@@ -223,4 +260,4 @@ function render(g,w,h,api){
   g.text(`個人最高單發 ${S.best} 分`, 18, h-14, 13, C.dim, "left", false);
 }
 
-export default { title:"吸氣彈弓鳥", reset, primaryLabel, primary, update, render };
+export default { title:"吸氣彈弓鳥", reset, getScore, primaryLabel, primary, update, render };
