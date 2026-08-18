@@ -67,13 +67,20 @@ function reset(api){
     counts:{great:0, good:0, miss:0},
     flash:0, judgeText:null, judgeUntil:0, judgeCol:null,
     liveFlow:0, stageLabel:"",
+    sound: api.sound, // 保存音效引用
   };
 }
+
+function getScore() {
+  return S ? S.score : 0;
+}
+
 function primaryLabel(){
   return S.done ? "再玩一次" : (S.running ? "重新開始" : "開始");
 }
 function primary(api){
   reset(api); S.running=true; S.t=-1.0;
+  if (S.sound) S.sound.play('click');
 }
 
 function popJudge(text, col, api){
@@ -91,6 +98,7 @@ function judgeHold(note, api){
   if(result==="miss"){
     S.combo=0; S.gauge=Math.max(0,S.gauge+GA_MISS);
     popJudge("不可", api.colors.dim, api);
+    if (S.sound) S.sound.play('taiko_miss');
   } else {
     S.combo++; S.bestCombo=Math.max(S.bestCombo,S.combo);
     const base = result==="great"? SC_GREAT : SC_GOOD;
@@ -98,6 +106,10 @@ function judgeHold(note, api){
     S.score += Math.round(base*bonus);
     S.gauge = Math.min(100, S.gauge + (result==="great"?GA_GREAT:GA_GOOD));
     popJudge(result==="great"?"良":"可", result==="great"?api.colors.gold:api.colors.green, api);
+    if (S.sound) {
+      if (result === 'great') S.sound.play('taiko_great');
+      else S.sound.play('taiko_good');
+    }
   }
 }
 
@@ -108,10 +120,24 @@ function judgeBalloon(note, api){
   else { result="miss"; gaugeDelta=GA_BALLOON_FAIL; scoreBase=0; }
   note.judged=result;
   S.counts[result==="great"?"great":result==="good"?"good":"miss"]++;
-  if(result==="miss"){ S.combo=0; popJudge("氣球沒吹滿", api.colors.dim, api); }
-  else { S.combo++; S.bestCombo=Math.max(S.bestCombo,S.combo); S.score+=Math.round(scoreBase);
-    popJudge(result==="great"?"氣球吹滿！":"氣球有到一半！", result==="great"?api.colors.gold:api.colors.green, api); }
+  if(result==="miss"){ 
+    S.combo=0; popJudge("氣球沒吹滿", api.colors.dim, api);
+    if (S.sound) S.sound.play('taiko_miss');
+  } else { 
+    S.combo++; S.bestCombo=Math.max(S.bestCombo,S.combo); 
+    S.score+=Math.round(scoreBase);
+    popJudge(result==="great"?"氣球吹滿！":"氣球有到一半！", result==="great"?api.colors.gold:api.colors.green, api);
+    if (S.sound) {
+      if (result === 'great') S.sound.play('taiko_great');
+      else S.sound.play('taiko_good');
+    }
+  }
   S.gauge = Math.max(0, Math.min(100, S.gauge+gaugeDelta));
+  
+  // 過關檢測
+  if (S.gauge >= GAUGE_CLEAR && S.sound) {
+    S.sound.play('taiko_clear');
+  }
 }
 
 function update(dt, input, api){
@@ -119,7 +145,13 @@ function update(dt, input, api){
   if(!S.running) return;
 
   S.t += dt;
-  if(S.t > CHART.total + 1.0){ S.running=false; S.done=true; return; }
+  if(S.t > CHART.total + 1.0){ 
+    S.running=false; S.done=true; 
+    if (S.sound && S.gauge >= GAUGE_CLEAR) {
+      S.sound.play('level_up');
+    }
+    return; 
+  }
 
   const flow = input.flow||0;
   const blowing = flow >= ONSET;
@@ -127,8 +159,14 @@ function update(dt, input, api){
   // 目前所在的段落標籤(給畫面顯示用)
   let stage = "";
   for(const n of CHART.notes){
-    if(n.type==="hold" && S.t>=n.t-1 && S.t<=n.end+1){ stage = n.kind==="inhale"?"吸氣熱身":"吐氣熱身"; break; }
-    if(n.type==="balloon" && S.t>=n.t-1 && S.t<=n.t+n.dur+1){ stage = n.kind==="inhale"?"吸氣氣球":"吐氣氣球"; break; }
+    if(n.type==="hold" && S.t>=n.t-1 && S.t<=n.end+1){ 
+      stage = n.kind==="inhale"?"吸氣熱身":"吐氣熱身"; 
+      break; 
+    }
+    if(n.type==="balloon" && S.t>=n.t-1 && S.t<=n.t+n.dur+1){ 
+      stage = n.kind==="inhale"?"吸氣氣球":"吐氣氣球"; 
+      break; 
+    }
   }
   S.stageLabel = stage;
 
@@ -141,7 +179,10 @@ function update(dt, input, api){
           const wasZero = n.holdHit<=0.001;
           n.holdHit = Math.min(n.dur, n.holdHit+dt);
           S.flash=1;
-          if(wasZero) popJudge("抓住了！維持住～", api.colors.green, api);
+          if(wasZero) {
+            popJudge("抓住了！維持住～", api.colors.green, api);
+            if (S.sound) S.sound.play('breath_start');
+          }
         }
       } else if(S.t > n.end + JUDGE_DELAY){
         judgeHold(n, api);
@@ -154,14 +195,22 @@ function update(dt, input, api){
         if(flow >= BALLOON_ONSET && flow >= BALLOON_LO){
           const frac = Math.max(0, Math.min(1, (flow-BALLOON_LO)/(BALLOON_HI-BALLOON_LO)));
           const rate = BALLOON_FILL_BASE + (BALLOON_FILL_MAX-BALLOON_FILL_BASE)*frac;
+          const oldFill = n.fill;
           n.fill = Math.min(1, n.fill + rate*dt);
           S.flash=1;
           n._liveMsg = n.fill>0.8? "快滿了！再撐一下！" : "蓄力中，很好！";
+          
+          // 每20%進度觸發音效
+          if (S.sound && Math.floor(n.fill * 5) > Math.floor(oldFill * 5)) {
+            S.sound.play('balloon_pop');
+          }
         } else {
           n.fill = Math.max(0, n.fill - BALLOON_LEAK*dt);
           n._liveMsg = flow>0 ? "再用力一點！" : null;
         }
-        if(n.fill>=1.0){ judgeBalloon(n, api); } // 提早吹滿,馬上結算,不用等到段落結束
+        if(n.fill>=1.0){ 
+          judgeBalloon(n, api); 
+        }
       } else if(S.t > end + JUDGE_DELAY){
         judgeBalloon(n, api);
       }
@@ -265,4 +314,4 @@ function render(g,w,h,api){
   }
 }
 
-export default { title:"呼吸太鼓", reset, primaryLabel, primary, update, render };
+export default { title:"呼吸太鼓", reset, getScore, primaryLabel, primary, update, render };
