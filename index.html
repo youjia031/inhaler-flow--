@@ -54,6 +54,7 @@
   .vol-icon{font-size:16px;cursor:pointer;}
   .music-indicator{font-size:11px;color:var(--dim);padding:2px 10px;border-radius:12px;background:var(--track);}
   .music-progress{font-size:10px;color:var(--dim-lt);padding:2px 6px;}
+  .tempo-display{font-size:10px;color:var(--gold);padding:2px 6px;}
 </style>
 </head>
 <body>
@@ -63,6 +64,7 @@
     <span id="status">未連線 · 可用「↑ ↓ 方向鍵」試玩</span>
     <span class="spacer"></span>
     <span class="music-indicator" id="musicLabel">🎵 選單音樂</span>
+    <span class="tempo-display" id="tempoDisplay">♩=72</span>
     <span class="music-progress" id="musicProgress"></span>
     <div class="volume-control">
       <span class="vol-icon" id="muteBtn">🔊</span>
@@ -114,7 +116,7 @@ import taiko from "./game_taiko.js";
 const GAMES = { angrybird, balloon, taiko };
 const ONSET = 12;
 
-// ================= 🎵 音樂系統（連貫＋樂器模擬） =================
+// ================= 🎵 音樂系統（正確樂理版） =================
 class MusicAndSoundManager {
   constructor() {
     this.ctx = null;
@@ -130,16 +132,14 @@ class MusicAndSoundManager {
     this.isBgmPlaying = false;
     this.musicLabel = document.getElementById('musicLabel');
     this.musicProgress = document.getElementById('musicProgress');
+    this.tempoDisplay = document.getElementById('tempoDisplay');
     this.beatCount = 0;
-    this.totalBeats = 256;
+    this.totalBeats = 0;
+    this.currentBPM = 72;
     
     this.chargeTone = null;
     this.chargeGain = null;
     this.isCharging = false;
-    
-    // 前一個音符（用於連奏）
-    this.prevNote = null;
-    this.prevTime = 0;
   }
 
   async init() {
@@ -158,7 +158,6 @@ class MusicAndSoundManager {
 
   // ============ 樂器模擬音色 ============
   
-  // 鋼琴音色（溫暖、衰減快）
   playPiano(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -166,24 +165,9 @@ class MusicAndSoundManager {
       try {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        const gain2 = this.ctx.createGain();
-        
-        // 主音：正弦波 + 一些泛音
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 添加一個微弱的八度泛音（鋼琴特色）
-        const osc2 = this.ctx.createOscillator();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(freq * 2, this.ctx.currentTime);
-        const gainOsc2 = this.ctx.createGain();
-        gainOsc2.gain.setValueAtTime(volume * 0.08, this.ctx.currentTime);
-        osc2.connect(gainOsc2);
-        gainOsc2.connect(this.ctx.destination);
-        osc2.start();
-        osc2.stop(this.ctx.currentTime + duration);
-        
-        // 音量包絡（鋼琴：快速起音，中等衰減）
         const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
         gain.gain.setValueAtTime(vol * 0.01, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.01);
@@ -195,14 +179,11 @@ class MusicAndSoundManager {
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
         
-        if (this.isBgmPlaying) {
-          this.bgmNodes.push(osc, osc2);
-        }
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 弦樂音色（平滑、持續、有顫音）
   playStrings(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -210,11 +191,9 @@ class MusicAndSoundManager {
       try {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 顫音（弦樂 vibrato）
         const mod = this.ctx.createOscillator();
         const modGain = this.ctx.createGain();
         mod.frequency.value = 5;
@@ -224,7 +203,6 @@ class MusicAndSoundManager {
         mod.start();
         mod.stop(this.ctx.currentTime + duration);
         
-        // 音量包絡（弦樂：緩慢起音，長延音，緩慢釋放）
         const vol = volume * this.sfxVolume * this.masterVolume * 0.5;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.08);
@@ -236,14 +214,11 @@ class MusicAndSoundManager {
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
         
-        if (this.isBgmPlaying) {
-          this.bgmNodes.push(osc, mod);
-        }
+        if (this.isBgmPlaying) this.bgmNodes.push(osc, mod);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 木管音色（溫暖、圓潤）
   playWoodwind(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -251,11 +226,9 @@ class MusicAndSoundManager {
       try {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        
         osc.type = 'triangle';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 音量包絡（木管：中等起音，平穩延音）
         const vol = volume * this.sfxVolume * this.masterVolume * 0.6;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.04);
@@ -267,14 +240,11 @@ class MusicAndSoundManager {
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
         
-        if (this.isBgmPlaying) {
-          this.bgmNodes.push(osc);
-        }
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 銅管音色（明亮、有力）
   playBrass(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -282,11 +252,9 @@ class MusicAndSoundManager {
       try {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        
         osc.type = 'square';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 低通濾波模擬（簡單版）
         const vol = volume * this.sfxVolume * this.masterVolume * 0.5;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.02);
@@ -298,22 +266,18 @@ class MusicAndSoundManager {
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
         
-        if (this.isBgmPlaying) {
-          this.bgmNodes.push(osc);
-        }
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 低音（大提琴/低音提琴）
-  playBass(freq, duration, volume, delay = 0) {
+  playBassInst(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
       if (this.isMuted || !this.isInitialized) return;
       try {
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
-        
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
@@ -327,295 +291,356 @@ class MusicAndSoundManager {
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
         
-        if (this.isBgmPlaying) {
-          this.bgmNodes.push(osc);
-        }
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // ============ 🎵 1. 選單音樂 - 「晨光」（鋼琴＋弦樂） ============
+  playDrum(freq, dur, vol, delay = 0, type = 'square') {
+    setTimeout(() => {
+      this.playTone(freq, dur, type, vol);
+    }, delay * 1000);
+  }
+
+  // ============ 🎵 1. 選單音樂 - 「晨光」（速度變化：72→80→72） ============
   playMenuMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 晨光';
     this.beatCount = 0;
-    this.totalBeats = 256;
+    this.totalBeats = 64; // 16小節 × 4拍
 
-    const chordProgression = [
+    // 和弦進行（C - G - Am - F - C - G - F - C）
+    const chords = [
       [523, 659, 784], [587, 740, 880], [587, 740, 880], [659, 784, 988],
       [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
     ];
-    const bassProgression = [130, 146, 146, 164, 130, 146, 164, 130];
+    const bass = [130, 146, 146, 164, 130, 146, 164, 130];
 
-    // 旋律：連續的音符（連奏）
+    // 🎵 旋律（每個音符：[頻率, 時值(拍)]）
+    // 時值：1 = 四分音符, 0.5 = 八分音符, 2 = 二分音符, 4 = 全音符
     const melody = [
-      // 小節1: C4 D4 E4 (C) E4 D4 C4
-      [523, 0.4], [587, 0.4], [659, 0.8], [0, 0.4], [0, 0.4], [523, 0.4], [587, 0.4],
-      // 小節2: E4 G4 E4 D4 C4
-      [659, 0.4], [784, 0.4], [659, 0.8], [587, 0.8], [0, 0.4], [523, 0.4],
-      // 小節3: C4 D4 E4 G4 E4 D4
-      [523, 0.8], [587, 0.4], [659, 0.4], [784, 0.8], [0, 0.4], [659, 0.4],
-      // 小節4: D4 C4 E4 D4 C4
-      [587, 0.4], [523, 0.8], [0, 0.4], [659, 0.8], [587, 0.4], [523, 0.4],
-      // 小節5: C4 D4 E4 C4 D4
-      [523, 0.4], [587, 0.4], [659, 0.8], [0, 0.8], [523, 0.4], [587, 0.4],
-      // 小節6: E4 G4 C5 G4 F4
-      [659, 0.4], [784, 0.4], [880, 0.8], [784, 0.4], [659, 0.4], [587, 0.8],
-      // 小節7: E4 G4 C5 G4 E4 D4
-      [659, 0.4], [784, 0.4], [880, 0.4], [784, 0.4], [659, 0.8], [0, 0.4], [587, 0.4],
-      // 小節8: C4 (長音)
-      [523, 1.6], [0, 0.4], [659, 0.4], [784, 0.4], [880, 0.4],
+      // 第1小節 (C和弦) - 4拍
+      [523, 0.5], [587, 0.5], [659, 1], [0, 0.5], [523, 0.5], [587, 0.5], [659, 0.5],
+      // 第2小節 (G和弦)
+      [659, 0.5], [784, 0.5], [659, 1], [587, 1], [523, 0.5], [587, 0.5],
+      // 第3小節 (Am和弦)
+      [523, 1], [587, 0.5], [659, 0.5], [784, 1], [659, 0.5], [587, 0.5],
+      // 第4小節 (F和弦)
+      [587, 0.5], [523, 1], [659, 1], [587, 0.5], [523, 0.5],
+      // 第5小節 (C和弦)
+      [523, 0.5], [587, 0.5], [659, 1], [0, 0.5], [523, 0.5], [587, 0.5],
+      // 第6小節 (G和弦)
+      [659, 0.5], [784, 0.5], [880, 1], [784, 0.5], [659, 0.5], [587, 1],
+      // 第7小節 (F和弦)
+      [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 1.5], [0, 0.5],
+      // 第8小節 (C和弦)
+      [523, 2], [659, 0.5], [784, 0.5], [880, 0.5], [0, 0.5],
+      // 第9-16小節（變奏）
+      [523, 0.5], [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5],
+      [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5], [0, 0.5],
+      [523, 0.5], [587, 0.5], [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5],
+      [523, 2], [659, 0.5], [784, 0.5], [880, 0.5], [0, 0.5],
+      [784, 0.5], [880, 0.5], [988, 0.5], [1047, 0.5], [988, 0.5], [880, 0.5], [784, 0.5], [659, 0.5],
+      [880, 0.5], [988, 0.5], [1047, 0.5], [988, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5],
+      [523, 0.5], [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5],
+      [523, 3], [0, 1],
     ];
 
-    const BPM = 72;
-    const beatDuration = 60 / BPM;
-    const subdiv = 4; // 每拍4個16分音符
-    const stepDuration = beatDuration / subdiv;
+    // 速度變化：A段72 → B段80 → A段72
+    let BPM = 72;
+    let beatIndex = 0;
+    const totalMelodyNotes = melody.length;
 
     this.currentBgm = 'menu';
     this.isBgmPlaying = true;
-    let stepIndex = 0;
-    let barIndex = 0;
 
     this.bgmInterval = setInterval(() => {
-      if (this.isMuted || !this.isBgmPlaying) return;
+      if (this.isMuted || !this.isBgmPlaying) {
+        clearInterval(this.bgmInterval);
+        return;
+      }
       
+      // 根據段落改變速度
+      const bar = Math.floor(beatIndex / 4);
+      if (bar < 4) BPM = 72;
+      else if (bar < 8) BPM = 80;
+      else if (bar < 12) BPM = 76;
+      else BPM = 72;
+      
+      this.currentBPM = BPM;
+      this.tempoDisplay.textContent = `♩=${BPM}`;
+      
+      const beatDuration = 60 / BPM;
       const vol = this.bgmVolume * this.masterVolume * 0.12;
-      const beat = Math.floor(stepIndex / subdiv) % 4;
-      const bar = Math.floor(stepIndex / (subdiv * 4));
-      
+      const beat = beatIndex % 4;
+      const barIdx = Math.floor(beatIndex / 4);
+
       // 和弦（每小節第一拍）
       if (beat === 0) {
-        const chordIdx = bar % chordProgression.length;
-        // 鋼琴和弦
-        chordProgression[chordIdx].forEach((f, i) => {
-          this.playPiano(f, beatDuration * 0.6, vol * (0.35 - i * 0.05), i * 0.02);
+        const chordIdx = barIdx % chords.length;
+        chords[chordIdx].forEach((f, i) => {
+          this.playPiano(f, beatDuration * 1.5, vol * (0.3 - i * 0.04), i * 0.02);
         });
-        this.playBass(bassProgression[chordIdx], beatDuration * 0.7, vol * 0.2, 0.05);
+        this.playBassInst(bass[chordIdx], beatDuration * 2, vol * 0.2, 0.05);
       }
 
-      // 旋律（連奏）
-      const melIdx = stepIndex % melody.length;
-      const note = melody[melIdx];
+      // 🎵 旋律
+      const noteIdx = beatIndex % totalMelodyNotes;
+      const note = melody[noteIdx];
       if (note && note[0] > 0) {
-        // 用鋼琴音色
-        this.playPiano(note[0], note[1] * beatDuration, vol * 0.5, 0);
-        // 弦樂和聲（八度）
-        if (stepIndex % 4 === 0) {
-          this.playStrings(note[0] * 2, note[1] * beatDuration * 0.7, vol * 0.12, 0.02);
+        const dur = note[1] * beatDuration;
+        this.playPiano(note[0], dur, vol * 0.5, 0);
+        // 弦樂和聲（每兩拍）
+        if (beat % 2 === 0) {
+          this.playStrings(note[0] * 2, dur * 0.6, vol * 0.1, 0.02);
         }
       }
 
-      stepIndex++;
-      if (stepIndex >= this.totalBeats * subdiv) stepIndex = 0;
+      beatIndex++;
+      if (beatIndex >= this.totalBeats) {
+        beatIndex = 0;
+      }
       
-      const progress = Math.round((stepIndex / (this.totalBeats * subdiv)) * 100);
-      const section = bar < 16 ? 'A' : bar < 32 ? 'B' : bar < 48 ? 'C' : '尾奏';
+      const progress = Math.round((beatIndex / this.totalBeats) * 100);
+      const section = bar < 4 ? 'A' : bar < 8 ? 'B' : bar < 12 ? 'C' : '尾奏';
       this.musicProgress.textContent = `${progress}% · ${section}`;
-    }, stepDuration * 1000);
+    }, (60 / BPM) * 1000);
   }
 
-  // ============ 🎵 2. 彈弓鳥 - 「征途」（銅管＋弦樂） ============
+  // ============ 🎵 2. 彈弓鳥 - 「征途」（速度變化：100→120→100） ============
   playAngrybirdMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 征途';
     this.beatCount = 0;
-    this.totalBeats = 256;
+    this.totalBeats = 64;
 
-    const chordProgression = [
+    const chords = [
       [392, 523, 659], [349, 523, 659], [349, 523, 659], [392, 523, 659],
       [392, 523, 784], [349, 523, 659], [349, 523, 659], [392, 523, 880]
     ];
-    const bassProgression = [98, 87, 87, 98, 98, 87, 87, 98];
+    const bass = [98, 87, 87, 98, 98, 87, 87, 98];
 
-    // 旋律（小調，節奏感強）
+    // 🎵 旋律（小調，節奏感強）
     const melody = [
-      [392, 0.3], [440, 0.3], [523, 0.6], [0, 0.3], [440, 0.3], [392, 0.3], [0, 0.3],
-      [392, 0.3], [523, 0.3], [587, 0.6], [523, 0.3], [440, 0.3], [392, 0.3], [0, 0.3],
-      [392, 0.6], [523, 0.3], [587, 0.3], [659, 0.3], [587, 0.3], [523, 0.3], [440, 0.3],
-      [392, 0.3], [523, 0.3], [587, 0.6], [523, 0.3], [440, 0.3], [392, 0.6],
-      [523, 0.3], [587, 0.3], [659, 0.6], [0, 0.3], [587, 0.3], [523, 0.3], [440, 0.3],
-      [523, 0.3], [659, 0.3], [784, 0.6], [659, 0.3], [587, 0.3], [523, 0.3], [0, 0.3],
-      [523, 0.3], [587, 0.3], [659, 0.3], [587, 0.3], [523, 0.6], [0, 0.3], [440, 0.3],
-      [392, 1.2], [0, 0.3], [523, 0.3], [587, 0.3], [659, 0.3],
+      [392, 0.5], [440, 0.5], [523, 1], [440, 0.5], [392, 0.5], [0, 1],
+      [392, 0.5], [523, 0.5], [587, 1], [523, 0.5], [440, 0.5], [392, 0.5], [0, 0.5],
+      [392, 1], [523, 0.5], [587, 0.5], [659, 0.5], [587, 0.5], [523, 0.5], [440, 0.5],
+      [392, 0.5], [523, 0.5], [587, 1], [523, 0.5], [440, 0.5], [392, 1],
+      [523, 0.5], [587, 0.5], [659, 1], [587, 0.5], [523, 0.5], [440, 0.5],
+      [523, 0.5], [659, 0.5], [784, 1], [659, 0.5], [587, 0.5], [523, 0.5], [0, 0.5],
+      [523, 0.5], [587, 0.5], [659, 0.5], [587, 0.5], [523, 1.5], [0, 0.5],
+      [392, 2], [523, 0.5], [587, 0.5], [659, 0.5], [0, 0.5],
+      // 變奏
+      [523, 0.5], [587, 0.5], [659, 0.5], [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5], [440, 0.5],
+      [523, 0.5], [659, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [523, 0.5], [440, 0.5], [392, 0.5],
+      [523, 1], [659, 0.5], [784, 0.5], [988, 1], [784, 0.5], [659, 0.5],
+      [523, 0.5], [659, 0.5], [784, 1], [659, 0.5], [587, 0.5], [523, 1],
+      [659, 0.5], [784, 0.5], [880, 1], [784, 0.5], [659, 0.5], [587, 0.5],
+      [659, 0.5], [880, 0.5], [1047, 1], [880, 0.5], [784, 0.5], [659, 0.5], [0, 0.5],
+      [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 1.5], [0, 0.5],
+      [523, 2], [659, 0.5], [784, 0.5], [880, 0.5], [0, 0.5],
     ];
 
-    const BPM = 110;
-    const beatDuration = 60 / BPM;
-    const subdiv = 4;
-    const stepDuration = beatDuration / subdiv;
+    let BPM = 100;
+    let beatIndex = 0;
+    const totalMelodyNotes = melody.length;
 
     this.currentBgm = 'angrybird';
     this.isBgmPlaying = true;
-    let stepIndex = 0;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
       
+      const bar = Math.floor(beatIndex / 4);
+      if (bar < 4) BPM = 100;
+      else if (bar < 8) BPM = 120;
+      else if (bar < 12) BPM = 110;
+      else BPM = 100;
+      
+      this.currentBPM = BPM;
+      this.tempoDisplay.textContent = `♩=${BPM}`;
+      
+      const beatDuration = 60 / BPM;
       const vol = this.bgmVolume * this.masterVolume * 0.10;
-      const beat = Math.floor(stepIndex / subdiv) % 4;
-      const bar = Math.floor(stepIndex / (subdiv * 4));
+      const beat = beatIndex % 4;
+      const barIdx = Math.floor(beatIndex / 4);
 
       if (beat === 0) {
-        const chordIdx = bar % chordProgression.length;
-        // 銅管和弦
-        chordProgression[chordIdx].forEach((f, i) => {
-          this.playBrass(f, beatDuration * 0.5, vol * (0.3 - i * 0.05), i * 0.02);
+        const chordIdx = barIdx % chords.length;
+        chords[chordIdx].forEach((f, i) => {
+          this.playBrass(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
         });
-        this.playBass(bassProgression[chordIdx], beatDuration * 0.7, vol * 0.2, 0.05);
-        // 軍鼓
+        this.playBassInst(bass[chordIdx], beatDuration * 1.5, vol * 0.2, 0.05);
         this.playDrum(120, 0.06, vol * 0.15, 0.02);
       }
       if (beat === 2) {
         this.playDrum(140, 0.04, vol * 0.1, 0);
       }
 
-      const melIdx = stepIndex % melody.length;
-      const note = melody[melIdx];
+      const noteIdx = beatIndex % totalMelodyNotes;
+      const note = melody[noteIdx];
       if (note && note[0] > 0) {
-        // 銅管旋律
-        this.playBrass(note[0], note[1] * beatDuration, vol * 0.45, 0);
-        // 弦樂和聲
-        this.playStrings(note[0] + 4, note[1] * beatDuration * 0.5, vol * 0.15, 0.02);
+        const dur = note[1] * beatDuration;
+        this.playBrass(note[0], dur, vol * 0.45, 0);
+        this.playStrings(note[0] + 4, dur * 0.5, vol * 0.12, 0.02);
       }
 
-      stepIndex++;
-      if (stepIndex >= this.totalBeats * subdiv) stepIndex = 0;
+      beatIndex++;
+      if (beatIndex >= this.totalBeats) beatIndex = 0;
       
-      const progress = Math.round((stepIndex / (this.totalBeats * subdiv)) * 100);
-      const section = bar < 16 ? 'A' : bar < 32 ? 'B' : bar < 48 ? 'C' : '尾奏';
+      const progress = Math.round((beatIndex / this.totalBeats) * 100);
+      const section = bar < 4 ? 'A' : bar < 8 ? 'B' : bar < 12 ? 'C' : '尾奏';
       this.musicProgress.textContent = `${progress}% · ${section}`;
-    }, stepDuration * 1000);
+    }, (60 / BPM) * 1000);
   }
 
-  // ============ 🎵 3. 吹氣球 - 「嘉年華」（木管＋鐘琴） ============
+  // ============ 🎵 3. 吹氣球 - 「嘉年華」（速度變化：120→132→120） ============
   playBalloonMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 嘉年華';
     this.beatCount = 0;
-    this.totalBeats = 224;
+    this.totalBeats = 56;
 
-    const chordProgression = [
+    const chords = [
       [523, 659, 784], [587, 740, 880], [659, 784, 988], [784, 988, 1175],
       [880, 1047, 1319], [784, 988, 1175], [659, 784, 988], [523, 659, 880]
     ];
-    const bassProgression = [130, 146, 164, 196, 220, 196, 164, 130];
+    const bass = [130, 146, 164, 196, 220, 196, 164, 130];
 
-    // 旋律（歡樂、跳躍、連貫）
+    // 🎵 旋律（歡樂、跳躍）
     const melody = [
-      [523, 0.2], [587, 0.2], [659, 0.4], [784, 0.4], [659, 0.4], [587, 0.2], [523, 0.2], [0, 0.4], [523, 0.2], [587, 0.2], [659, 0.4],
-      [523, 0.2], [659, 0.2], [784, 0.4], [880, 0.4], [784, 0.4], [659, 0.2], [587, 0.2], [523, 0.4], [0, 0.2], [659, 0.2], [784, 0.4],
-      [659, 0.2], [784, 0.2], [880, 0.4], [988, 0.4], [880, 0.4], [784, 0.2], [659, 0.2], [0, 0.4], [659, 0.2], [784, 0.2], [880, 0.4],
-      [659, 0.2], [784, 0.2], [880, 0.4], [784, 0.4], [659, 0.4], [587, 0.2], [523, 0.2], [0, 0.4], [659, 0.2], [784, 0.2], [880, 0.4],
-      [784, 0.2], [880, 0.2], [988, 0.4], [1047, 0.4], [988, 0.4], [880, 0.2], [784, 0.2], [0, 0.4], [784, 0.2], [880, 0.2], [988, 0.4],
-      [784, 0.2], [880, 0.2], [988, 0.4], [880, 0.4], [784, 0.4], [659, 0.2], [587, 0.2], [0, 0.4], [784, 0.2], [880, 0.2], [988, 0.4],
-      [659, 0.2], [784, 0.2], [880, 0.4], [988, 0.4], [880, 0.4], [784, 0.2], [659, 0.2], [0, 0.4], [659, 0.2], [784, 0.2], [880, 0.4],
-      [523, 0.4], [659, 0.4], [784, 0.4], [880, 0.4], [784, 0.4], [659, 0.4], [587, 0.4], [523, 0.4],
+      [523, 0.25], [587, 0.25], [659, 0.5], [784, 0.5], [659, 0.5], [587, 0.25], [523, 0.25], [0, 0.5],
+      [523, 0.25], [659, 0.25], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.25], [587, 0.25], [523, 0.5],
+      [659, 0.25], [784, 0.25], [880, 0.5], [988, 0.5], [880, 0.5], [784, 0.25], [659, 0.25], [0, 0.5],
+      [659, 0.25], [784, 0.25], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.25], [523, 0.25], [0, 0.5],
+      [784, 0.25], [880, 0.25], [988, 0.5], [1047, 0.5], [988, 0.5], [880, 0.25], [784, 0.25], [0, 0.5],
+      [784, 0.25], [880, 0.25], [988, 0.5], [880, 0.5], [784, 0.5], [659, 0.25], [587, 0.25], [0, 0.5],
+      [659, 0.25], [784, 0.25], [880, 0.5], [988, 0.5], [880, 0.5], [784, 0.25], [659, 0.25], [0, 0.5],
+      [523, 0.5], [659, 0.5], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.5], [587, 0.5], [523, 0.5],
     ];
 
-    const BPM = 120;
-    const beatDuration = 60 / BPM;
-    const subdiv = 4;
-    const stepDuration = beatDuration / subdiv;
+    let BPM = 120;
+    let beatIndex = 0;
+    const totalMelodyNotes = melody.length;
 
     this.currentBgm = 'balloon';
     this.isBgmPlaying = true;
-    let stepIndex = 0;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
       
+      const bar = Math.floor(beatIndex / 4);
+      if (bar < 4) BPM = 120;
+      else if (bar < 8) BPM = 132;
+      else if (bar < 12) BPM = 126;
+      else BPM = 120;
+      
+      this.currentBPM = BPM;
+      this.tempoDisplay.textContent = `♩=${BPM}`;
+      
+      const beatDuration = 60 / BPM;
       const vol = this.bgmVolume * this.masterVolume * 0.12;
-      const beat = Math.floor(stepIndex / subdiv) % 4;
-      const bar = Math.floor(stepIndex / (subdiv * 4));
+      const beat = beatIndex % 4;
+      const barIdx = Math.floor(beatIndex / 4);
 
       if (beat === 0) {
-        const chordIdx = bar % chordProgression.length;
-        // 木管和弦
-        chordProgression[chordIdx].forEach((f, i) => {
-          this.playWoodwind(f, beatDuration * 0.4, vol * (0.3 - i * 0.05), i * 0.02);
+        const chordIdx = barIdx % chords.length;
+        chords[chordIdx].forEach((f, i) => {
+          this.playWoodwind(f, beatDuration * 1.2, vol * (0.3 - i * 0.04), i * 0.02);
         });
-        this.playBass(bassProgression[chordIdx], beatDuration * 0.5, vol * 0.15, 0.05);
+        this.playBassInst(bass[chordIdx], beatDuration * 1.5, vol * 0.15, 0.05);
       }
       if (beat === 2) {
-        const chordIdx = bar % chordProgression.length;
-        chordProgression[chordIdx].forEach((f, i) => {
-          this.playWoodwind(f, beatDuration * 0.25, vol * (0.15 - i * 0.03), i * 0.02);
+        const chordIdx = barIdx % chords.length;
+        chords[chordIdx].forEach((f, i) => {
+          this.playWoodwind(f, beatDuration * 0.6, vol * (0.15 - i * 0.03), i * 0.02);
         });
       }
 
-      const melIdx = stepIndex % melody.length;
-      const note = melody[melIdx];
+      const noteIdx = beatIndex % totalMelodyNotes;
+      const note = melody[noteIdx];
       if (note && note[0] > 0) {
-        // 木管旋律（主）
-        this.playWoodwind(note[0], note[1] * beatDuration, vol * 0.45, 0);
-        // 鐘琴高音裝飾
-        if (stepIndex % 2 === 0) {
-          this.playPiano(note[0] * 2, note[1] * beatDuration * 0.3, vol * 0.1, 0.01);
+        const dur = note[1] * beatDuration;
+        this.playWoodwind(note[0], dur, vol * 0.45, 0);
+        if (beat % 2 === 0) {
+          this.playPiano(note[0] * 2, dur * 0.3, vol * 0.1, 0.01);
         }
       }
 
-      stepIndex++;
-      if (stepIndex >= this.totalBeats * subdiv) stepIndex = 0;
+      beatIndex++;
+      if (beatIndex >= this.totalBeats) beatIndex = 0;
       
-      const progress = Math.round((stepIndex / (this.totalBeats * subdiv)) * 100);
-      const section = bar < 16 ? 'A' : bar < 32 ? 'B' : bar < 40 ? 'C' : '尾奏';
+      const progress = Math.round((beatIndex / this.totalBeats) * 100);
+      const section = bar < 4 ? 'A' : bar < 8 ? 'B' : bar < 12 ? 'C' : '尾奏';
       this.musicProgress.textContent = `${progress}% · ${section}`;
-    }, stepDuration * 1000);
+    }, (60 / BPM) * 1000);
   }
 
-  // ============ 🎵 4. 太鼓 - 「祭典」（尺八＋太鼓） ============
+  // ============ 🎵 4. 太鼓 - 「祭典」（速度變化：130→145→130） ============
   playTaikoMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 祭典';
     this.beatCount = 0;
-    this.totalBeats = 240;
+    this.totalBeats = 60;
 
     const scale = [294, 330, 392, 440, 494];
-    const chordProgression = [
+    const chords = [
       [294, 392, 440], [330, 440, 494], [392, 494, 294], [440, 294, 330],
       [294, 392, 494], [330, 440, 294], [392, 494, 440], [294, 440, 494]
     ];
-    const bassProgression = [73, 82, 98, 110, 73, 82, 98, 73];
+    const bass = [73, 82, 98, 110, 73, 82, 98, 73];
 
+    // 🎵 旋律（五聲音階）
     const melody = [
-      [294, 0.4], [330, 0.4], [392, 0.8], [0, 0.4], [330, 0.4], [294, 0.4], [0, 0.4],
-      [294, 0.4], [392, 0.4], [440, 0.8], [392, 0.4], [330, 0.4], [294, 0.4], [0, 0.4],
-      [392, 0.4], [440, 0.4], [494, 0.8], [0, 0.4], [440, 0.4], [392, 0.4], [330, 0.4],
-      [294, 0.4], [392, 0.4], [440, 0.8], [392, 0.4], [330, 0.4], [294, 0.8],
-      [392, 0.4], [440, 0.4], [494, 0.4], [588, 0.4], [494, 0.8], [440, 0.4], [392, 0.4],
-      [392, 0.4], [494, 0.4], [588, 0.8], [494, 0.4], [440, 0.4], [392, 0.4], [0, 0.4],
-      [392, 0.4], [440, 0.4], [494, 0.4], [440, 0.4], [392, 0.8], [0, 0.4], [330, 0.4],
-      [294, 1.6], [0, 0.4], [392, 0.4], [440, 0.4], [494, 0.4],
+      [294, 0.5], [330, 0.5], [392, 1], [330, 0.5], [294, 0.5], [0, 1],
+      [294, 0.5], [392, 0.5], [440, 1], [392, 0.5], [330, 0.5], [294, 0.5], [0, 0.5],
+      [392, 0.5], [440, 0.5], [494, 1], [440, 0.5], [392, 0.5], [330, 0.5],
+      [294, 0.5], [392, 0.5], [440, 1], [392, 0.5], [330, 0.5], [294, 1],
+      [392, 0.5], [440, 0.5], [494, 0.5], [588, 0.5], [494, 1], [440, 0.5], [392, 0.5],
+      [392, 0.5], [494, 0.5], [588, 1], [494, 0.5], [440, 0.5], [392, 0.5], [0, 0.5],
+      [392, 0.5], [440, 0.5], [494, 0.5], [440, 0.5], [392, 1.5], [0, 0.5],
+      [294, 2], [392, 0.5], [440, 0.5], [494, 0.5], [0, 0.5],
+      // 變奏
+      [392, 0.5], [440, 0.5], [494, 0.5], [588, 0.5], [494, 0.5], [440, 0.5], [392, 0.5], [330, 0.5],
+      [392, 0.5], [494, 0.5], [588, 0.5], [494, 0.5], [440, 0.5], [392, 0.5], [330, 0.5], [294, 0.5],
+      [392, 1], [494, 0.5], [588, 0.5], [659, 1], [588, 0.5], [494, 0.5],
+      [440, 0.5], [588, 0.5], [659, 1], [588, 0.5], [494, 0.5], [392, 1],
     ];
 
-    const BPM = 130;
-    const beatDuration = 60 / BPM;
-    const subdiv = 4;
-    const stepDuration = beatDuration / subdiv;
+    let BPM = 130;
+    let beatIndex = 0;
+    const totalMelodyNotes = melody.length;
 
     this.currentBgm = 'taiko';
     this.isBgmPlaying = true;
-    let stepIndex = 0;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
       
+      const bar = Math.floor(beatIndex / 4);
+      if (bar < 4) BPM = 130;
+      else if (bar < 8) BPM = 145;
+      else if (bar < 12) BPM = 138;
+      else BPM = 130;
+      
+      this.currentBPM = BPM;
+      this.tempoDisplay.textContent = `♩=${BPM}`;
+      
+      const beatDuration = 60 / BPM;
       const vol = this.bgmVolume * this.masterVolume * 0.10;
-      const beat = Math.floor(stepIndex / subdiv) % 4;
-      const bar = Math.floor(stepIndex / (subdiv * 4));
+      const beat = beatIndex % 4;
+      const barIdx = Math.floor(beatIndex / 4);
 
       if (beat === 0) {
-        const chordIdx = bar % chordProgression.length;
-        // 尺八和弦（鋸齒波＋顫音）
-        chordProgression[chordIdx].forEach((f, i) => {
-          this.playWoodwind(f, beatDuration * 0.5, vol * (0.25 - i * 0.04), i * 0.02);
+        const chordIdx = barIdx % chords.length;
+        chords[chordIdx].forEach((f, i) => {
+          this.playWoodwind(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
         });
-        this.playBass(bassProgression[chordIdx], beatDuration * 0.6, vol * 0.2, 0.05);
+        this.playBassInst(bass[chordIdx], beatDuration * 1.5, vol * 0.2, 0.05);
       }
 
       // 太鼓節奏
@@ -631,37 +656,27 @@ class MusicAndSoundManager {
         this.playDrum(165, 0.06, vol * 0.15, 0.12);
       }
 
-      const melIdx = stepIndex % melody.length;
-      const note = melody[melIdx];
+      const noteIdx = beatIndex % totalMelodyNotes;
+      const note = melody[noteIdx];
       if (note && note[0] > 0) {
-        // 尺八旋律（鋸齒波＋顫音）
-        this.playWoodwind(note[0], note[1] * beatDuration, vol * 0.4, 0);
-        // 五度和聲
-        this.playStrings(note[0] * 1.5, note[1] * beatDuration * 0.4, vol * 0.12, 0.02);
+        const dur = note[1] * beatDuration;
+        this.playWoodwind(note[0], dur, vol * 0.4, 0);
+        this.playStrings(note[0] * 1.5, dur * 0.4, vol * 0.1, 0.02);
       }
 
-      stepIndex++;
-      if (stepIndex >= this.totalBeats * subdiv) stepIndex = 0;
+      beatIndex++;
+      if (beatIndex >= this.totalBeats) beatIndex = 0;
       
-      const progress = Math.round((stepIndex / (this.totalBeats * subdiv)) * 100);
-      const section = bar < 16 ? 'A' : bar < 32 ? 'B' : bar < 44 ? 'C' : '尾奏';
+      const progress = Math.round((beatIndex / this.totalBeats) * 100);
+      const section = bar < 4 ? 'A' : bar < 8 ? 'B' : bar < 12 ? 'C' : '尾奏';
       this.musicProgress.textContent = `${progress}% · ${section}`;
-    }, stepDuration * 1000);
-  }
-
-  // ============ 工具函數 ============
-  
-  playDrum(freq, dur, vol, delay = 0, type = 'square') {
-    setTimeout(() => {
-      this.playTone(freq, dur, type, vol);
-    }, delay * 1000);
+    }, (60 / BPM) * 1000);
   }
 
   // ============ 播放控制 ============
   
   playBgm(style = 'menu') {
     this.stopBgm();
-    this.prevNote = null;
     switch(style) {
       case 'menu': this.playMenuMusic(); break;
       case 'angrybird': this.playAngrybirdMusic(); break;
