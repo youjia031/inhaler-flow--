@@ -56,6 +56,7 @@
   .music-progress{font-size:10px;color:var(--dim-lt);padding:2px 6px;}
   .tempo-display{font-size:10px;color:var(--gold);padding:2px 6px;}
   .section-display{font-size:10px;color:#7fe08d;padding:2px 6px;}
+  .track-display{font-size:9px;color:var(--dim);padding:2px 6px;}
 </style>
 </head>
 <body>
@@ -67,6 +68,7 @@
     <span class="music-indicator" id="musicLabel">🎵 選單音樂</span>
     <span class="tempo-display" id="tempoDisplay">♩=72</span>
     <span class="section-display" id="sectionDisplay">前奏</span>
+    <span class="track-display" id="trackDisplay">🎹</span>
     <span class="music-progress" id="musicProgress"></span>
     <div class="volume-control">
       <span class="vol-icon" id="muteBtn">🔊</span>
@@ -118,15 +120,15 @@ import taiko from "./game_taiko.js";
 const GAMES = { angrybird, balloon, taiko };
 const ONSET = 12;
 
-// ================= 🎵 音樂系統（完整歌曲結構版） =================
+// ================= 🎵 音樂系統（正確分軌與分段版） =================
 class MusicAndSoundManager {
   constructor() {
     this.ctx = null;
     this.isInitialized = false;
     this.isMuted = false;
-    this.masterVolume = 0.6;  // 提高整體音量
+    this.masterVolume = 0.6;
     this.sfxVolume = 0.9;
-    this.bgmVolume = 0.25;    // 提高 BGM 音量
+    this.bgmVolume = 0.25;
     
     this.bgmNodes = [];
     this.bgmInterval = null;
@@ -136,9 +138,15 @@ class MusicAndSoundManager {
     this.musicProgress = document.getElementById('musicProgress');
     this.tempoDisplay = document.getElementById('tempoDisplay');
     this.sectionDisplay = document.getElementById('sectionDisplay');
+    this.trackDisplay = document.getElementById('trackDisplay');
     this.beatCount = 0;
-    this.totalBeats = 0;
     this.currentBPM = 72;
+    
+    // 段落控制
+    this.currentSectionIndex = 0;
+    this.beatInSection = 0;
+    this.sectionStartTime = 0;
+    this.isSectionComplete = false;
     
     this.chargeTone = null;
     this.chargeGain = null;
@@ -159,35 +167,19 @@ class MusicAndSoundManager {
     }
   }
 
-  // ============ 🎹 生動音色 ============
+  // ============ 🎹 樂器音色 ============
   
-  // 1. 溫暖鋼琴（加入泛音列）
-  playWarmPiano(freq, duration, volume, delay = 0) {
+  playPiano(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
       if (this.isMuted || !this.isInitialized) return;
       try {
-        // 主音
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 第一泛音（八度）
-        const osc2 = this.ctx.createOscillator();
-        const gain2 = this.ctx.createGain();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(freq * 2, this.ctx.currentTime);
-        gain2.gain.setValueAtTime(volume * 0.12, this.ctx.currentTime);
-        
-        // 第二泛音（五度）
-        const osc3 = this.ctx.createOscillator();
-        const gain3 = this.ctx.createGain();
-        osc3.type = 'sine';
-        osc3.frequency.setValueAtTime(freq * 3, this.ctx.currentTime);
-        gain3.gain.setValueAtTime(volume * 0.05, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 1.2;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.9;
         gain.gain.setValueAtTime(vol * 0.01, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.015);
         gain.gain.exponentialRampToValueAtTime(vol * 0.25, this.ctx.currentTime + duration * 0.3);
@@ -195,25 +187,14 @@ class MusicAndSoundManager {
         
         osc.connect(gain);
         gain.connect(this.ctx.destination);
-        osc2.connect(gain2);
-        gain2.connect(this.ctx.destination);
-        osc3.connect(gain3);
-        gain3.connect(this.ctx.destination);
-        
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        osc2.start();
-        osc2.stop(this.ctx.currentTime + duration);
-        osc3.start();
-        osc3.stop(this.ctx.currentTime + duration);
-        
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, osc2, osc3);
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 2. 溫暖弦樂（加入顫音和慢起音）
-  playWarmStrings(freq, duration, volume, delay = 0) {
+  playStrings(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
       if (this.isMuted || !this.isInitialized) return;
@@ -223,44 +204,30 @@ class MusicAndSoundManager {
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 顫音
         const mod = this.ctx.createOscillator();
         const modGain = this.ctx.createGain();
-        mod.frequency.value = 6;
-        modGain.gain.value = 4;
+        mod.frequency.value = 5.5;
+        modGain.gain.value = 3;
         mod.connect(modGain);
         modGain.connect(osc.frequency);
         mod.start();
         mod.stop(this.ctx.currentTime + duration);
         
-        // 八度泛音
-        const osc2 = this.ctx.createOscillator();
-        const gain2 = this.ctx.createGain();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(freq * 2, this.ctx.currentTime);
-        gain2.gain.setValueAtTime(volume * 0.1, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.9;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.1);
+        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.08);
         gain.gain.setValueAtTime(vol, this.ctx.currentTime + duration * 0.6);
         gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
         
         osc.connect(gain);
         gain.connect(this.ctx.destination);
-        osc2.connect(gain2);
-        gain2.connect(this.ctx.destination);
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        osc2.start();
-        osc2.stop(this.ctx.currentTime + duration);
-        
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, osc2, mod);
+        if (this.isBgmPlaying) this.bgmNodes.push(osc, mod);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 3. 長笛音色（氣音感）
   playFlute(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -271,22 +238,9 @@ class MusicAndSoundManager {
         osc.type = 'triangle';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 氣音（白噪音）
-        const noise = this.ctx.createBufferSource();
-        const bufferSize = this.ctx.sampleRate * 0.1;
-        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
-        noise.buffer = buffer;
-        const noiseGain = this.ctx.createGain();
-        noiseGain.gain.setValueAtTime(volume * 0.1, this.ctx.currentTime);
-        noiseGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        noise.connect(noiseGain);
-        noiseGain.connect(this.ctx.destination);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 1.1;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.8;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.05);
+        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.04);
         gain.gain.setValueAtTime(vol * 0.85, this.ctx.currentTime + duration * 0.5);
         gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
         
@@ -294,15 +248,11 @@ class MusicAndSoundManager {
         gain.connect(this.ctx.destination);
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        noise.start();
-        noise.stop(this.ctx.currentTime + duration);
-        
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, noise);
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 4. 小號音色（明亮有力）
   playTrumpet(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -313,14 +263,7 @@ class MusicAndSoundManager {
         osc.type = 'square';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        // 低通濾波模擬（用另一個振盪器）
-        const osc2 = this.ctx.createOscillator();
-        const gain2 = this.ctx.createGain();
-        osc2.type = 'sine';
-        osc2.frequency.setValueAtTime(freq * 2, this.ctx.currentTime);
-        gain2.gain.setValueAtTime(volume * 0.15, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.9;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.02);
         gain.gain.setValueAtTime(vol * 0.7, this.ctx.currentTime + duration * 0.3);
@@ -328,20 +271,14 @@ class MusicAndSoundManager {
         
         osc.connect(gain);
         gain.connect(this.ctx.destination);
-        osc2.connect(gain2);
-        gain2.connect(this.ctx.destination);
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        osc2.start();
-        osc2.stop(this.ctx.currentTime + duration);
-        
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, osc2);
+        if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 5. 低音大提琴
-  playDoubleBass(freq, duration, volume, delay = 0) {
+  playBass(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
       if (this.isMuted || !this.isInitialized) return;
@@ -351,29 +288,26 @@ class MusicAndSoundManager {
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
         
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.6;
         gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.04);
+        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.03);
         gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
         
         osc.connect(gain);
         gain.connect(this.ctx.destination);
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        
         if (this.isBgmPlaying) this.bgmNodes.push(osc);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // 6. 打擊樂
   playDrum(freq, dur, vol, delay = 0, type = 'square') {
     setTimeout(() => {
       this.playTone(freq, dur, type, vol);
     }, delay * 1000);
   }
 
-  // 7. 鈴聲（高頻裝飾）
   playBell(freq, duration, volume, delay = 0) {
     if (!freq || freq === 0) return;
     setTimeout(() => {
@@ -386,14 +320,14 @@ class MusicAndSoundManager {
         
         const mod = this.ctx.createOscillator();
         const modGain = this.ctx.createGain();
-        mod.frequency.value = 8;
+        mod.frequency.value = 7;
         modGain.gain.value = 2;
         mod.connect(modGain);
         modGain.connect(osc.frequency);
         mod.start();
         mod.stop(this.ctx.currentTime + duration);
         
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.8;
+        const vol = volume * this.sfxVolume * this.masterVolume * 0.6;
         gain.gain.setValueAtTime(vol, this.ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
         
@@ -401,514 +335,730 @@ class MusicAndSoundManager {
         gain.connect(this.ctx.destination);
         osc.start();
         osc.stop(this.ctx.currentTime + duration);
-        
         if (this.isBgmPlaying) this.bgmNodes.push(osc, mod);
       } catch(e) {}
     }, delay * 1000);
   }
 
-  // ============ 🎵 1. 選單音樂 - 「晨光」（完整歌曲結構） ============
+  // ============ 🎵 1. 選單音樂 - 「晨光」（正確分軌與分段） ============
   playMenuMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 晨光';
+    this.currentSectionIndex = 0;
+    this.beatInSection = 0;
+    this.isSectionComplete = false;
     this.beatCount = 0;
-    this.totalBeats = 160; // 40小節 × 4拍
 
-    // 和弦進行（豐富變化）
-    const chords = {
-      // 前奏 (4小節) - C大調
-      intro: [[523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]],
-      // 主歌 (8小節) - C大調
-      verse: [
-        [523, 659, 784], [587, 740, 880], [587, 740, 880], [659, 784, 988],
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
-      ],
-      // 導歌 (4小節) - 轉G大調
-      prechorus: [
-        [587, 740, 880], [659, 784, 988], [659, 784, 988], [784, 988, 1175]
-      ],
-      // 副歌 (8小節) - C大調
-      chorus: [
-        [523, 659, 784], [659, 784, 988], [784, 988, 1175], [880, 1047, 1319],
-        [523, 659, 784], [659, 784, 988], [880, 1047, 1319], [784, 988, 1175]
-      ],
-      // 間奏 (4小節)
-      interlude: [
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
-      ],
-      // 橋段 (4小節) - 轉調
-      bridge: [
-        [392, 523, 659], [440, 587, 740], [523, 659, 784], [587, 740, 880]
-      ],
-      // 尾奏 (8小節)
-      outro: [
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880],
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
-      ]
-    };
-    const bass = {
-      intro: [130, 146, 164, 130],
-      verse: [130, 146, 146, 164, 130, 146, 164, 130],
-      prechorus: [146, 164, 164, 196],
-      chorus: [130, 164, 196, 220, 130, 164, 220, 196],
-      interlude: [130, 146, 164, 130],
-      bridge: [98, 110, 130, 146],
-      outro: [130, 146, 164, 130, 130, 146, 164, 130]
-    };
-
-    // 🎵 主旋律
-    const melody = {
-      intro: [
-        [523, 1], [587, 1], [659, 1], [784, 1]
-      ],
-      verse: [
-        [523, 0.5], [587, 0.5], [659, 1], [0, 0.5], [523, 0.5], [587, 0.5], [659, 0.5],
-        [659, 0.5], [784, 0.5], [659, 1], [587, 1], [523, 0.5], [587, 0.5],
-        [523, 1], [587, 0.5], [659, 0.5], [784, 1], [659, 0.5], [587, 0.5],
-        [587, 0.5], [523, 1], [659, 1], [587, 0.5], [523, 0.5]
-      ],
-      prechorus: [
-        [587, 0.5], [659, 0.5], [784, 1], [0, 0.5], [587, 0.5], [659, 0.5],
-        [659, 0.5], [784, 0.5], [880, 1], [784, 1]
-      ],
-      chorus: [
-        [523, 0.5], [659, 0.5], [784, 1], [0, 0.5], [523, 0.5], [659, 0.5],
-        [659, 0.5], [784, 0.5], [880, 1], [784, 1], [659, 0.5], [784, 0.5],
-        [784, 0.5], [880, 0.5], [988, 1], [784, 0.5], [880, 0.5], [988, 0.5],
-        [880, 0.5], [784, 1], [988, 1], [880, 0.5], [784, 0.5]
-      ],
-      interlude: [
-        [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [587, 0.5],
-        [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [523, 0.5]
-      ],
-      bridge: [
-        [392, 0.5], [440, 0.5], [523, 1], [0, 0.5], [392, 0.5], [440, 0.5],
-        [440, 0.5], [523, 0.5], [587, 1], [523, 0.5], [440, 0.5], [392, 0.5]
-      ],
-      outro: [
-        [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [587, 0.5],
-        [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [523, 0.5],
-        [523, 1], [587, 0.5], [659, 0.5], [784, 0.5], [659, 0.5], [587, 0.5],
-        [523, 3], [0, 1]
-      ]
-    };
-
-    // 段落順序
+    // ===== 段落定義 =====
+    // 每個段落：{ name, beats, bpm, tracks: [{ instrument, entryBeat, notes }] }
     const sections = [
-      { name: '前奏', beats: 16, bpm: 68, volMul: 0.7 },
-      { name: '主歌', beats: 32, bpm: 72, volMul: 0.8 },
-      { name: '導歌', beats: 16, bpm: 76, volMul: 0.9 },
-      { name: '副歌', beats: 32, bpm: 80, volMul: 1.0 },
-      { name: '間奏', beats: 16, bpm: 72, volMul: 0.8 },
-      { name: '橋段', beats: 16, bpm: 76, volMul: 0.9 },
-      { name: '副歌', beats: 16, bpm: 80, volMul: 1.0 },
-      { name: '尾奏', beats: 16, bpm: 68, volMul: 0.7 }
+      // ===== 前奏 (4小節, 16拍) =====
+      {
+        name: '前奏',
+        beats: 16,
+        bpm: 68,
+        tracks: [
+          // 音軌1: 鋼琴（從第0拍開始）
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 2], [587, 2], [659, 2], [784, 2],
+              [523, 1], [587, 1], [659, 1], [784, 1]
+            ]
+          },
+          // 音軌2: 低音（從第2拍開始）
+          {
+            instrument: 'bass',
+            entryBeat: 2,
+            notes: [
+              [130, 4], [146, 4], [164, 4], [130, 4]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 主歌 (8小節, 32拍) =====
+      {
+        name: '主歌',
+        beats: 32,
+        bpm: 72,
+        tracks: [
+          // 音軌1: 鋼琴（從第0拍開始）
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 0.5], [587, 0.5], [659, 1], [0, 0.5], [523, 0.5], [587, 0.5], [659, 0.5],
+              [659, 0.5], [784, 0.5], [659, 1], [587, 1], [523, 0.5], [587, 0.5],
+              [523, 1], [587, 0.5], [659, 0.5], [784, 1], [659, 0.5], [587, 0.5],
+              [587, 0.5], [523, 1], [659, 1], [587, 0.5], [523, 0.5]
+            ]
+          },
+          // 音軌2: 低音（從第0拍開始）
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [130, 4], [146, 4], [146, 4], [164, 4],
+              [130, 4], [146, 4], [164, 4], [130, 4]
+            ]
+          },
+          // 音軌3: 弦樂（從第8拍開始，主歌中段加入）
+          {
+            instrument: 'strings',
+            entryBeat: 8,
+            notes: [
+              [523, 2], [659, 2], [784, 2], [880, 2],
+              [523, 2], [659, 2], [880, 2], [784, 2]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 導歌 (4小節, 16拍) =====
+      {
+        name: '導歌',
+        beats: 16,
+        bpm: 76,
+        tracks: [
+          // 音軌1: 鋼琴
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [587, 0.5], [659, 0.5], [784, 1], [0, 0.5], [587, 0.5], [659, 0.5],
+              [659, 0.5], [784, 0.5], [880, 1], [784, 1]
+            ]
+          },
+          // 音軌2: 低音
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [146, 4], [164, 4], [164, 4], [196, 4]
+            ]
+          },
+          // 音軌3: 弦樂（第0拍進入）
+          {
+            instrument: 'strings',
+            entryBeat: 0,
+            notes: [
+              [587, 2], [784, 2], [880, 2], [1047, 2]
+            ]
+          },
+          // 音軌4: 長笛（第6拍進入，延遲進入）
+          {
+            instrument: 'flute',
+            entryBeat: 6,
+            notes: [
+              [784, 1.5], [880, 1], [784, 1], [659, 1.5]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 副歌 (8小節, 32拍) =====
+      {
+        name: '副歌',
+        beats: 32,
+        bpm: 80,
+        tracks: [
+          // 音軌1: 鋼琴
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 0.5], [659, 0.5], [784, 1], [0, 0.5], [523, 0.5], [659, 0.5],
+              [659, 0.5], [784, 0.5], [880, 1], [784, 1], [659, 0.5], [784, 0.5],
+              [784, 0.5], [880, 0.5], [988, 1], [784, 0.5], [880, 0.5], [988, 0.5],
+              [880, 0.5], [784, 1], [988, 1], [880, 0.5], [784, 0.5]
+            ]
+          },
+          // 音軌2: 低音
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [130, 4], [164, 4], [196, 4], [220, 4],
+              [130, 4], [164, 4], [220, 4], [196, 4]
+            ]
+          },
+          // 音軌3: 弦樂（第0拍進入）
+          {
+            instrument: 'strings',
+            entryBeat: 0,
+            notes: [
+              [523, 2], [784, 2], [988, 2], [1175, 2],
+              [523, 2], [784, 2], [1175, 2], [988, 2]
+            ]
+          },
+          // 音軌4: 小號（第8拍進入）
+          {
+            instrument: 'trumpet',
+            entryBeat: 8,
+            notes: [
+              [523, 1], [659, 1], [784, 1], [880, 1],
+              [523, 1], [659, 1], [880, 1], [784, 1]
+            ]
+          },
+          // 音軌5: 打擊樂（第16拍進入）
+          {
+            instrument: 'drum',
+            entryBeat: 16,
+            notes: [
+              [75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05],
+              [75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05]
+            ]
+          },
+          // 音軌6: 鈴聲（第24拍進入，裝飾）
+          {
+            instrument: 'bell',
+            entryBeat: 24,
+            notes: [
+              [1319, 0.1], [1568, 0.08], [1319, 0.1], [1568, 0.08]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 間奏 (4小節, 16拍) =====
+      {
+        name: '間奏',
+        beats: 16,
+        bpm: 72,
+        tracks: [
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [587, 0.5],
+              [523, 0.5], [587, 0.5], [659, 1], [784, 0.5], [659, 0.5], [523, 0.5]
+            ]
+          },
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [130, 4], [146, 4], [164, 4], [130, 4]
+            ]
+          },
+          {
+            instrument: 'flute',
+            entryBeat: 4,
+            notes: [
+              [659, 1.5], [784, 1], [659, 1], [587, 1.5]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 橋段 (4小節, 16拍) =====
+      {
+        name: '橋段',
+        beats: 16,
+        bpm: 76,
+        tracks: [
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [392, 0.5], [440, 0.5], [523, 1], [0, 0.5], [392, 0.5], [440, 0.5],
+              [440, 0.5], [523, 0.5], [587, 1], [523, 0.5], [440, 0.5], [392, 0.5]
+            ]
+          },
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [98, 4], [110, 4], [130, 4], [146, 4]
+            ]
+          },
+          {
+            instrument: 'strings',
+            entryBeat: 0,
+            notes: [
+              [392, 2], [523, 2], [659, 2], [784, 2]
+            ]
+          },
+          {
+            instrument: 'trumpet',
+            entryBeat: 4,
+            notes: [
+              [523, 1.5], [587, 1], [523, 1], [440, 1.5]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 副歌 (4小節, 16拍) =====
+      {
+        name: '副歌2',
+        beats: 16,
+        bpm: 80,
+        tracks: [
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 0.5], [659, 0.5], [784, 1], [0, 0.5], [523, 0.5], [659, 0.5],
+              [659, 0.5], [784, 0.5], [880, 1], [784, 1], [659, 0.5], [784, 0.5]
+            ]
+          },
+          {
+            instrument: 'bass',
+            entryBeat: 0,
+            notes: [
+              [130, 4], [164, 4], [196, 4], [220, 4]
+            ]
+          },
+          {
+            instrument: 'strings',
+            entryBeat: 0,
+            notes: [
+              [523, 2], [784, 2], [988, 2], [1175, 2]
+            ]
+          },
+          {
+            instrument: 'trumpet',
+            entryBeat: 4,
+            notes: [
+              [523, 1], [659, 1], [784, 1], [880, 1]
+            ]
+          },
+          {
+            instrument: 'drum',
+            entryBeat: 8,
+            notes: [
+              [75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05]
+            ]
+          }
+        ]
+      },
+      
+      // ===== 尾奏 (4小節, 16拍) =====
+      {
+        name: '尾奏',
+        beats: 16,
+        bpm: 68,
+        tracks: [
+          {
+            instrument: 'piano',
+            entryBeat: 0,
+            notes: [
+              [523, 1], [587, 1], [659, 1], [784, 1],
+              [523, 2], [659, 1], [784, 1]
+            ]
+          },
+          {
+            instrument: 'bass',
+            entryBeat: 2,
+            notes: [
+              [130, 4], [146, 4], [164, 4], [130, 4]
+            ]
+          },
+          {
+            instrument: 'strings',
+            entryBeat: 4,
+            notes: [
+              [523, 3], [659, 2], [784, 3]
+            ]
+          }
+        ]
+      }
     ];
 
-    let currentSection = 0;
-    let beatInSection = 0;
-    let beatIndex = 0;
+    // ===== 播放邏輯 =====
     let totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
+    let globalBeat = 0;
+    let currentSectionIdx = 0;
+    let beatInSection = 0;
+    let sectionBeats = sections[0].beats;
 
     this.currentBgm = 'menu';
     this.isBgmPlaying = true;
 
     this.bgmInterval = setInterval(() => {
-      if (this.isMuted || !this.isBgmPlaying) return;
-      
-      // 計算當前段落
-      let accumulated = 0;
-      for (let i = 0; i < sections.length; i++) {
-        if (beatIndex < accumulated + sections[i].beats) {
-          currentSection = i;
-          beatInSection = beatIndex - accumulated;
-          break;
-        }
-        accumulated += sections[i].beats;
+      if (this.isMuted || !this.isBgmPlaying) {
+        clearInterval(this.bgmInterval);
+        return;
       }
-      
-      const section = sections[currentSection];
+
+      // 檢查是否該切換段落
+      if (beatInSection >= sectionBeats) {
+        currentSectionIdx++;
+        if (currentSectionIdx >= sections.length) {
+          // 全部播完，重頭開始
+          currentSectionIdx = 0;
+          globalBeat = 0;
+        }
+        beatInSection = 0;
+        sectionBeats = sections[currentSectionIdx].beats;
+        this.currentSectionIndex = currentSectionIdx;
+        this.sectionDisplay.textContent = sections[currentSectionIdx].name;
+        this.trackDisplay.textContent = '🎵';
+      }
+
+      const section = sections[currentSectionIdx];
       const BPM = section.bpm;
       this.currentBPM = BPM;
       this.tempoDisplay.textContent = `♩=${BPM}`;
-      this.sectionDisplay.textContent = section.name;
       
       const beatDuration = 60 / BPM;
-      const vol = this.bgmVolume * this.masterVolume * section.volMul * 1.1;
-      const beat = beatInSection % 4;
-      const barIdx = Math.floor(beatInSection / 4);
+      const vol = this.bgmVolume * this.masterVolume * 1.0;
 
-      // 獲取和弦
-      let chordList, bassList, melodyList;
-      const sName = section.name;
-      if (sName === '前奏') { chordList = chords.intro; bassList = bass.intro; melodyList = melody.intro; }
-      else if (sName === '主歌') { chordList = chords.verse; bassList = bass.verse; melodyList = melody.verse; }
-      else if (sName === '導歌') { chordList = chords.prechorus; bassList = bass.prechorus; melodyList = melody.prechorus; }
-      else if (sName === '副歌') { chordList = chords.chorus; bassList = bass.chorus; melodyList = melody.chorus; }
-      else if (sName === '間奏') { chordList = chords.interlude; bassList = bass.interlude; melodyList = melody.interlude; }
-      else if (sName === '橋段') { chordList = chords.bridge; bassList = bass.bridge; melodyList = melody.bridge; }
-      else { chordList = chords.outro; bassList = bass.outro; melodyList = melody.outro; }
-
-      // 和弦（每小節第一拍）
-      if (beat === 0) {
-        const chordIdx = barIdx % chordList.length;
-        // 不同段落用不同樂器
-        if (sName === '前奏' || sName === '尾奏') {
-          chordList[chordIdx].forEach((f, i) => {
-            this.playWarmPiano(f, beatDuration * 1.5, vol * (0.3 - i * 0.04), i * 0.02);
-          });
-        } else if (sName === '副歌') {
-          chordList[chordIdx].forEach((f, i) => {
-            this.playWarmStrings(f, beatDuration * 1.5, vol * (0.25 - i * 0.04), i * 0.02);
-          });
-        } else {
-          chordList[chordIdx].forEach((f, i) => {
-            this.playWarmPiano(f, beatDuration * 1.3, vol * (0.28 - i * 0.04), i * 0.02);
-          });
+      // 播放當前段落的音軌
+      section.tracks.forEach(track => {
+        // 計算這個音軌在當前拍子是否該發聲
+        const relativeBeat = beatInSection - track.entryBeat;
+        if (relativeBeat >= 0 && relativeBeat < track.notes.length) {
+          const noteData = track.notes[relativeBeat];
+          if (noteData && noteData[0] > 0) {
+            const duration = noteData[1] * beatDuration;
+            const instrument = track.instrument;
+            
+            // 根據樂器類型播放
+            switch(instrument) {
+              case 'piano':
+                this.playPiano(noteData[0], duration, vol * 0.5, 0);
+                break;
+              case 'strings':
+                this.playStrings(noteData[0], duration, vol * 0.4, 0);
+                break;
+              case 'flute':
+                this.playFlute(noteData[0], duration, vol * 0.45, 0);
+                break;
+              case 'trumpet':
+                this.playTrumpet(noteData[0], duration, vol * 0.5, 0);
+                break;
+              case 'bass':
+                this.playBass(noteData[0], duration, vol * 0.35, 0);
+                break;
+              case 'drum':
+                if (Array.isArray(noteData)) {
+                  this.playDrum(noteData[0], noteData[1] || 0.12, vol * 0.3, 0);
+                }
+                break;
+              case 'bell':
+                this.playBell(noteData[0], duration, vol * 0.2, 0);
+                break;
+            }
+          }
         }
-        this.playDoubleBass(bassList[barIdx % bassList.length], beatDuration * 2, vol * 0.2, 0.05);
-      }
+      });
 
-      // 🎵 旋律
-      const noteIdx = beatInSection % melodyList.length;
-      const note = melodyList[noteIdx];
-      if (note && note[0] > 0) {
-        const dur = note[1] * beatDuration;
-        if (sName === '前奏') {
-          this.playFlute(note[0], dur, vol * 0.5, 0);
-        } else if (sName === '副歌') {
-          this.playTrumpet(note[0], dur, vol * 0.55, 0);
-          this.playWarmStrings(note[0] * 2, dur * 0.5, vol * 0.1, 0.02);
-        } else if (sName === '橋段') {
-          this.playWarmStrings(note[0], dur, vol * 0.5, 0);
-        } else {
-          this.playWarmPiano(note[0], dur, vol * 0.5, 0);
-        }
-      }
-
-      // 裝飾音（副歌加鈴聲）
-      if (sName === '副歌' && beat === 0 && barIdx % 2 === 0) {
-        this.playBell(1319, 0.1, vol * 0.1, 0);
-        this.playBell(1568, 0.08, vol * 0.08, 0.1);
-      }
-
-      beatIndex++;
-      if (beatIndex >= totalBeats) {
-        beatIndex = 0;
-      }
-      
-      const progress = Math.round((beatIndex / totalBeats) * 100);
+      // 更新進度
+      beatInSection++;
+      globalBeat++;
+      const progress = Math.round((globalBeat / totalBeats) * 100);
       this.musicProgress.textContent = `${progress}%`;
-    }, 100); // 快速更新，但實際節奏由 beatDuration 控制
+
+    }, 100); // 快速輪詢，實際節奏由 beatDuration 控制
   }
 
-  // ============ 🎵 2. 彈弓鳥 - 「征途」（完整歌曲結構） ============
+  // ============ 🎵 2. 彈弓鳥 - 「征途」（精簡版，示範分軌結構） ============
   playAngrybirdMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 征途';
-    this.beatCount = 0;
-    this.totalBeats = 144;
+    this.currentSectionIndex = 0;
+    this.beatInSection = 0;
 
-    // 段落順序（小調風格）
     const sections = [
-      { name: '前奏', beats: 16, bpm: 90, volMul: 0.7 },
-      { name: '主歌', beats: 32, bpm: 100, volMul: 0.8 },
-      { name: '導歌', beats: 16, bpm: 106, volMul: 0.9 },
-      { name: '副歌', beats: 24, bpm: 112, volMul: 1.0 },
-      { name: '間奏', beats: 16, bpm: 100, volMul: 0.8 },
-      { name: '橋段', beats: 16, bpm: 106, volMul: 0.9 },
-      { name: '副歌', beats: 16, bpm: 112, volMul: 1.0 },
-      { name: '尾奏', beats: 8, bpm: 90, volMul: 0.7 }
+      {
+        name: '前奏',
+        beats: 12,
+        bpm: 90,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[392, 2], [523, 2], [659, 2], [392, 2], [523, 1], [659, 1]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[98, 4], [130, 4], [98, 4]] }
+        ]
+      },
+      {
+        name: '主歌',
+        beats: 24,
+        bpm: 100,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[392, 0.5], [440, 0.5], [523, 1], [440, 0.5], [392, 0.5], [0, 1], [392, 0.5], [523, 0.5], [587, 1], [523, 0.5], [440, 0.5], [392, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[98, 4], [130, 4], [98, 4], [130, 4]] },
+          { instrument: 'strings', entryBeat: 6, notes: [[392, 2], [523, 2], [659, 2], [784, 2]] }
+        ]
+      },
+      {
+        name: '副歌',
+        beats: 20,
+        bpm: 110,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[523, 0.5], [659, 0.5], [880, 1], [659, 0.5], [523, 0.5], [659, 0.5], [659, 0.5], [880, 0.5], [1047, 1], [880, 0.5], [659, 0.5], [523, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[130, 4], [164, 4], [196, 4], [220, 4]] },
+          { instrument: 'trumpet', entryBeat: 4, notes: [[523, 1], [659, 1], [880, 1], [1047, 1]] },
+          { instrument: 'drum', entryBeat: 8, notes: [[75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05]] }
+        ]
+      },
+      {
+        name: '尾奏',
+        beats: 12,
+        bpm: 90,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[392, 2], [523, 2], [659, 2], [392, 2]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[98, 4], [130, 4], [98, 4]] }
+        ]
+      }
     ];
 
-    // 和弦（小調）
-    const chordData = {
-      intro: [[392, 523, 659], [349, 523, 659], [349, 523, 659], [392, 523, 659]],
-      verse: [
-        [392, 523, 659], [349, 523, 659], [349, 523, 659], [392, 523, 659],
-        [392, 523, 784], [349, 523, 659], [349, 523, 659], [392, 523, 880]
-      ],
-      prechorus: [
-        [349, 523, 659], [392, 523, 659], [392, 523, 659], [349, 523, 659]
-      ],
-      chorus: [
-        [523, 659, 880], [587, 740, 880], [587, 740, 880], [523, 659, 880],
-        [523, 659, 880], [587, 740, 880], [587, 740, 880], [523, 659, 880]
-      ],
-      interlude: [
-        [392, 523, 659], [349, 523, 659], [349, 523, 659], [392, 523, 659]
-      ],
-      bridge: [
-        [440, 587, 740], [392, 523, 659], [349, 523, 659], [523, 659, 880]
-      ],
-      outro: [
-        [392, 523, 659], [349, 523, 659], [349, 523, 659], [392, 523, 659],
-        [392, 523, 784], [349, 523, 659], [349, 523, 659], [392, 523, 880]
-      ]
-    };
-
-    // 🎵 旋律（省略詳細旋律，與之前類似但更豐富）
-    // ... (為了節省篇幅，省略重複的旋律數據，實際使用時會補齊)
-
-    let beatIndex = 0;
     let totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
+    let globalBeat = 0;
+    let currentSectionIdx = 0;
+    let beatInSection = 0;
+    let sectionBeats = sections[0].beats;
 
     this.currentBgm = 'angrybird';
     this.isBgmPlaying = true;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      
-      // 計算當前段落
-      let accumulated = 0;
-      let currentSection = 0;
-      let beatInSection = 0;
-      for (let i = 0; i < sections.length; i++) {
-        if (beatIndex < accumulated + sections[i].beats) {
-          currentSection = i;
-          beatInSection = beatIndex - accumulated;
-          break;
-        }
-        accumulated += sections[i].beats;
+
+      if (beatInSection >= sectionBeats) {
+        currentSectionIdx++;
+        if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
+        beatInSection = 0;
+        sectionBeats = sections[currentSectionIdx].beats;
+        this.sectionDisplay.textContent = sections[currentSectionIdx].name;
       }
-      
-      const section = sections[currentSection];
+
+      const section = sections[currentSectionIdx];
       const BPM = section.bpm;
       this.currentBPM = BPM;
       this.tempoDisplay.textContent = `♩=${BPM}`;
-      this.sectionDisplay.textContent = section.name;
       
       const beatDuration = 60 / BPM;
-      const vol = this.bgmVolume * this.masterVolume * section.volMul * 1.1;
-      const beat = beatInSection % 4;
+      const vol = this.bgmVolume * this.masterVolume * 1.0;
 
-      // 簡化版：只播放基礎和弦和節奏
-      if (beat === 0) {
-        const chordList = chordData[section.name.toLowerCase()] || chordData.verse;
-        const chordIdx = Math.floor(beatInSection / 4) % chordList.length;
-        chordList[chordIdx].forEach((f, i) => {
-          this.playTrumpet(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
-        });
-        this.playDoubleBass(98, beatDuration * 1.5, vol * 0.2, 0.05);
-        this.playDrum(120, 0.06, vol * 0.15, 0.02);
-      }
-      if (beat === 2) {
-        this.playDrum(140, 0.04, vol * 0.1, 0);
-      }
+      section.tracks.forEach(track => {
+        const relativeBeat = beatInSection - track.entryBeat;
+        if (relativeBeat >= 0 && relativeBeat < track.notes.length) {
+          const noteData = track.notes[relativeBeat];
+          if (noteData && noteData[0] > 0) {
+            const duration = noteData[1] * beatDuration;
+            switch(track.instrument) {
+              case 'piano': this.playPiano(noteData[0], duration, vol * 0.5, 0); break;
+              case 'strings': this.playStrings(noteData[0], duration, vol * 0.4, 0); break;
+              case 'trumpet': this.playTrumpet(noteData[0], duration, vol * 0.5, 0); break;
+              case 'bass': this.playBass(noteData[0], duration, vol * 0.35, 0); break;
+              case 'drum': this.playDrum(noteData[0], noteData[1] || 0.12, vol * 0.3, 0); break;
+            }
+          }
+        }
+      });
 
-      beatIndex++;
-      if (beatIndex >= totalBeats) beatIndex = 0;
-      
-      const progress = Math.round((beatIndex / totalBeats) * 100);
+      beatInSection++;
+      globalBeat++;
+      const progress = Math.round((globalBeat / totalBeats) * 100);
       this.musicProgress.textContent = `${progress}%`;
     }, 100);
   }
 
-  // ============ 🎵 3. 吹氣球 - 「嘉年華」（完整歌曲結構） ============
+  // ============ 🎵 3. 吹氣球 - 「嘉年華」（精簡版） ============
   playBalloonMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 嘉年華';
-    this.beatCount = 0;
-    this.totalBeats = 128;
+    this.currentSectionIndex = 0;
+    this.beatInSection = 0;
 
     const sections = [
-      { name: '前奏', beats: 12, bpm: 110, volMul: 0.7 },
-      { name: '主歌', beats: 28, bpm: 120, volMul: 0.8 },
-      { name: '導歌', beats: 12, bpm: 126, volMul: 0.9 },
-      { name: '副歌', beats: 24, bpm: 132, volMul: 1.0 },
-      { name: '間奏', beats: 12, bpm: 120, volMul: 0.8 },
-      { name: '橋段', beats: 12, bpm: 126, volMul: 0.9 },
-      { name: '副歌', beats: 16, bpm: 132, volMul: 1.0 },
-      { name: '尾奏', beats: 12, bpm: 110, volMul: 0.7 }
+      {
+        name: '前奏',
+        beats: 12,
+        bpm: 110,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[523, 1], [659, 1], [784, 1], [523, 1], [659, 1], [784, 1]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[130, 4], [164, 4], [130, 4]] }
+        ]
+      },
+      {
+        name: '主歌',
+        beats: 24,
+        bpm: 120,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[523, 0.25], [587, 0.25], [659, 0.5], [784, 0.5], [659, 0.5], [587, 0.25], [523, 0.25], [0, 0.5], [523, 0.25], [659, 0.25], [784, 0.5], [880, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[130, 4], [164, 4], [196, 4], [130, 4]] },
+          { instrument: 'flute', entryBeat: 8, notes: [[523, 2], [659, 2], [784, 2], [880, 2]] }
+        ]
+      },
+      {
+        name: '副歌',
+        beats: 20,
+        bpm: 132,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[523, 0.25], [659, 0.25], [784, 0.5], [880, 0.5], [784, 0.5], [659, 0.25], [523, 0.25], [0, 0.5], [523, 0.25], [659, 0.25], [784, 0.5], [880, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[130, 4], [164, 4], [196, 4], [220, 4]] },
+          { instrument: 'flute', entryBeat: 0, notes: [[523, 2], [659, 2], [784, 2], [880, 2]] },
+          { instrument: 'drum', entryBeat: 8, notes: [[75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05]] }
+        ]
+      },
+      {
+        name: '尾奏',
+        beats: 12,
+        bpm: 110,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[523, 2], [659, 2], [784, 2], [523, 2]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[130, 4], [164, 4], [130, 4]] }
+        ]
+      }
     ];
 
-    // 大調和弦
-    const chordData = {
-      intro: [[523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]],
-      verse: [
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [784, 988, 1175],
-        [880, 1047, 1319], [784, 988, 1175], [659, 784, 988], [523, 659, 880]
-      ],
-      prechorus: [
-        [523, 659, 784], [659, 784, 988], [784, 988, 1175], [880, 1047, 1319]
-      ],
-      chorus: [
-        [523, 659, 784], [659, 784, 988], [784, 988, 1175], [880, 1047, 1319],
-        [523, 659, 784], [659, 784, 988], [880, 1047, 1319], [784, 988, 1175]
-      ],
-      interlude: [
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
-      ],
-      bridge: [
-        [392, 523, 659], [440, 587, 740], [523, 659, 784], [587, 740, 880]
-      ],
-      outro: [
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880],
-        [523, 659, 784], [587, 740, 880], [659, 784, 988], [523, 659, 880]
-      ]
-    };
-
-    let beatIndex = 0;
     let totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
+    let globalBeat = 0;
+    let currentSectionIdx = 0;
+    let beatInSection = 0;
+    let sectionBeats = sections[0].beats;
 
     this.currentBgm = 'balloon';
     this.isBgmPlaying = true;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      
-      let accumulated = 0;
-      let currentSection = 0;
-      let beatInSection = 0;
-      for (let i = 0; i < sections.length; i++) {
-        if (beatIndex < accumulated + sections[i].beats) {
-          currentSection = i;
-          beatInSection = beatIndex - accumulated;
-          break;
-        }
-        accumulated += sections[i].beats;
+
+      if (beatInSection >= sectionBeats) {
+        currentSectionIdx++;
+        if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
+        beatInSection = 0;
+        sectionBeats = sections[currentSectionIdx].beats;
+        this.sectionDisplay.textContent = sections[currentSectionIdx].name;
       }
-      
-      const section = sections[currentSection];
+
+      const section = sections[currentSectionIdx];
       const BPM = section.bpm;
       this.currentBPM = BPM;
       this.tempoDisplay.textContent = `♩=${BPM}`;
-      this.sectionDisplay.textContent = section.name;
       
       const beatDuration = 60 / BPM;
-      const vol = this.bgmVolume * this.masterVolume * section.volMul * 1.1;
-      const beat = beatInSection % 4;
+      const vol = this.bgmVolume * this.masterVolume * 1.0;
 
-      if (beat === 0) {
-        const chordList = chordData[section.name.toLowerCase()] || chordData.verse;
-        const chordIdx = Math.floor(beatInSection / 4) % chordList.length;
-        chordList[chordIdx].forEach((f, i) => {
-          this.playFlute(f, beatDuration * 1.2, vol * (0.3 - i * 0.04), i * 0.02);
-        });
-        this.playDoubleBass(130, beatDuration * 1.5, vol * 0.15, 0.05);
-      }
-      if (beat === 2) {
-        const chordList = chordData[section.name.toLowerCase()] || chordData.verse;
-        const chordIdx = Math.floor(beatInSection / 4) % chordList.length;
-        chordList[chordIdx].forEach((f, i) => {
-          this.playFlute(f, beatDuration * 0.6, vol * (0.15 - i * 0.03), i * 0.02);
-        });
-      }
+      section.tracks.forEach(track => {
+        const relativeBeat = beatInSection - track.entryBeat;
+        if (relativeBeat >= 0 && relativeBeat < track.notes.length) {
+          const noteData = track.notes[relativeBeat];
+          if (noteData && noteData[0] > 0) {
+            const duration = noteData[1] * beatDuration;
+            switch(track.instrument) {
+              case 'piano': this.playPiano(noteData[0], duration, vol * 0.5, 0); break;
+              case 'flute': this.playFlute(noteData[0], duration, vol * 0.45, 0); break;
+              case 'bass': this.playBass(noteData[0], duration, vol * 0.35, 0); break;
+              case 'drum': this.playDrum(noteData[0], noteData[1] || 0.12, vol * 0.3, 0); break;
+            }
+          }
+        }
+      });
 
-      beatIndex++;
-      if (beatIndex >= totalBeats) beatIndex = 0;
-      
-      const progress = Math.round((beatIndex / totalBeats) * 100);
+      beatInSection++;
+      globalBeat++;
+      const progress = Math.round((globalBeat / totalBeats) * 100);
       this.musicProgress.textContent = `${progress}%`;
     }, 100);
   }
 
-  // ============ 🎵 4. 太鼓 - 「祭典」（完整歌曲結構） ============
+  // ============ 🎵 4. 太鼓 - 「祭典」（精簡版） ============
   playTaikoMusic() {
     this.stopBgm();
     if (this.isMuted) return;
     this.musicLabel.textContent = '🎵 祭典';
-    this.beatCount = 0;
-    this.totalBeats = 136;
-
-    const sections = [
-      { name: '前奏', beats: 12, bpm: 120, volMul: 0.7 },
-      { name: '主歌', beats: 28, bpm: 130, volMul: 0.8 },
-      { name: '導歌', beats: 12, bpm: 136, volMul: 0.9 },
-      { name: '副歌', beats: 24, bpm: 142, volMul: 1.0 },
-      { name: '間奏', beats: 12, bpm: 130, volMul: 0.8 },
-      { name: '橋段', beats: 12, bpm: 136, volMul: 0.9 },
-      { name: '副歌', beats: 20, bpm: 142, volMul: 1.0 },
-      { name: '尾奏', beats: 16, bpm: 120, volMul: 0.7 }
-    ];
+    this.currentSectionIndex = 0;
+    this.beatInSection = 0;
 
     const pentatonic = [294, 330, 392, 440, 494];
-    const chordData = {
-      intro: [[294, 392, 440], [330, 440, 494], [392, 494, 294], [440, 294, 330]],
-      verse: [
-        [294, 392, 440], [330, 440, 494], [392, 494, 294], [440, 294, 330],
-        [294, 392, 494], [330, 440, 294], [392, 494, 440], [294, 440, 494]
-      ],
-      prechorus: [
-        [294, 392, 440], [392, 494, 294], [440, 294, 330], [330, 440, 494]
-      ],
-      chorus: [
-        [294, 392, 440], [392, 494, 294], [440, 294, 330], [330, 440, 494],
-        [294, 392, 494], [392, 494, 440], [330, 440, 294], [294, 440, 494]
-      ],
-      interlude: [
-        [294, 392, 440], [330, 440, 494], [392, 494, 294], [294, 440, 494]
-      ],
-      bridge: [
-        [392, 494, 440], [294, 392, 494], [330, 440, 294], [392, 494, 294]
-      ],
-      outro: [
-        [294, 392, 440], [330, 440, 494], [392, 494, 294], [294, 440, 494],
-        [294, 392, 440], [330, 440, 494], [392, 494, 294], [294, 440, 494]
-      ]
-    };
 
-    let beatIndex = 0;
+    const sections = [
+      {
+        name: '前奏',
+        beats: 12,
+        bpm: 120,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[294, 1], [392, 1], [440, 1], [294, 1], [392, 1], [440, 1]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[73, 4], [98, 4], [73, 4]] }
+        ]
+      },
+      {
+        name: '主歌',
+        beats: 24,
+        bpm: 130,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[294, 0.5], [330, 0.5], [392, 1], [330, 0.5], [294, 0.5], [0, 1], [294, 0.5], [392, 0.5], [440, 1], [392, 0.5], [330, 0.5], [294, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[73, 4], [98, 4], [110, 4], [73, 4]] },
+          { instrument: 'flute', entryBeat: 6, notes: [[294, 2], [392, 2], [440, 2], [494, 2]] }
+        ]
+      },
+      {
+        name: '副歌',
+        beats: 20,
+        bpm: 142,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[392, 0.5], [440, 0.5], [494, 1], [440, 0.5], [392, 0.5], [330, 0.5], [294, 0.5], [392, 0.5], [440, 1], [392, 0.5], [330, 0.5], [294, 0.5]] },
+          { instrument: 'bass', entryBeat: 0, notes: [[73, 4], [98, 4], [110, 4], [73, 4]] },
+          { instrument: 'drum', entryBeat: 0, notes: [[75, 0.12], [140, 0.05], [75, 0.12], [140, 0.05]] },
+          { instrument: 'drum', entryBeat: 8, notes: [[55, 0.16], [165, 0.06], [55, 0.16], [165, 0.06]] }
+        ]
+      },
+      {
+        name: '尾奏',
+        beats: 12,
+        bpm: 120,
+        tracks: [
+          { instrument: 'piano', entryBeat: 0, notes: [[294, 2], [392, 2], [440, 2], [294, 2]] },
+          { instrument: 'bass', entryBeat: 2, notes: [[73, 4], [98, 4], [73, 4]] }
+        ]
+      }
+    ];
+
     let totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
+    let globalBeat = 0;
+    let currentSectionIdx = 0;
+    let beatInSection = 0;
+    let sectionBeats = sections[0].beats;
 
     this.currentBgm = 'taiko';
     this.isBgmPlaying = true;
 
     this.bgmInterval = setInterval(() => {
       if (this.isMuted || !this.isBgmPlaying) return;
-      
-      let accumulated = 0;
-      let currentSection = 0;
-      let beatInSection = 0;
-      for (let i = 0; i < sections.length; i++) {
-        if (beatIndex < accumulated + sections[i].beats) {
-          currentSection = i;
-          beatInSection = beatIndex - accumulated;
-          break;
-        }
-        accumulated += sections[i].beats;
+
+      if (beatInSection >= sectionBeats) {
+        currentSectionIdx++;
+        if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
+        beatInSection = 0;
+        sectionBeats = sections[currentSectionIdx].beats;
+        this.sectionDisplay.textContent = sections[currentSectionIdx].name;
       }
-      
-      const section = sections[currentSection];
+
+      const section = sections[currentSectionIdx];
       const BPM = section.bpm;
       this.currentBPM = BPM;
       this.tempoDisplay.textContent = `♩=${BPM}`;
-      this.sectionDisplay.textContent = section.name;
       
       const beatDuration = 60 / BPM;
-      const vol = this.bgmVolume * this.masterVolume * section.volMul * 1.1;
-      const beat = beatInSection % 4;
+      const vol = this.bgmVolume * this.masterVolume * 1.0;
 
-      if (beat === 0) {
-        const chordList = chordData[section.name.toLowerCase()] || chordData.verse;
-        const chordIdx = Math.floor(beatInSection / 4) % chordList.length;
-        chordList[chordIdx].forEach((f, i) => {
-          this.playFlute(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
-        });
-        this.playDoubleBass(73, beatDuration * 1.5, vol * 0.2, 0.05);
-      }
+      section.tracks.forEach(track => {
+        const relativeBeat = beatInSection - track.entryBeat;
+        if (relativeBeat >= 0 && relativeBeat < track.notes.length) {
+          const noteData = track.notes[relativeBeat];
+          if (noteData && noteData[0] > 0) {
+            const duration = noteData[1] * beatDuration;
+            switch(track.instrument) {
+              case 'piano': this.playPiano(noteData[0], duration, vol * 0.5, 0); break;
+              case 'flute': this.playFlute(noteData[0], duration, vol * 0.45, 0); break;
+              case 'bass': this.playBass(noteData[0], duration, vol * 0.35, 0); break;
+              case 'drum': this.playDrum(noteData[0], noteData[1] || 0.12, vol * 0.3, 0); break;
+            }
+          }
+        }
+      });
 
-      // 太鼓節奏（隨段落變化）
-      const drumVol = section.volMul * vol * 0.5;
-      if (beat === 0 || beat === 2) {
-        this.playDrum(75, 0.12, drumVol, 0.01);
-        this.playDrum(140, 0.05, drumVol * 0.6, 0.04);
-      }
-      if (beat === 1 || beat === 3) {
-        this.playDrum(105, 0.06, vol * 0.2, 0);
-      }
-      if (beat === 0 && Math.floor(beatInSection / 4) % 4 === 0) {
-        this.playDrum(55, 0.16, drumVol * 0.7, 0.06);
-        this.playDrum(165, 0.06, vol * 0.15, 0.12);
-      }
-
-      beatIndex++;
-      if (beatIndex >= totalBeats) beatIndex = 0;
-      
-      const progress = Math.round((beatIndex / totalBeats) * 100);
+      beatInSection++;
+      globalBeat++;
+      const progress = Math.round((globalBeat / totalBeats) * 100);
       this.musicProgress.textContent = `${progress}%`;
     }, 100);
   }
