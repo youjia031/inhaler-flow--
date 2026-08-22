@@ -28,6 +28,7 @@
   .spacer{flex:1;}
   #wrap{flex:1;position:relative;min-height:0;}
   canvas{width:100%;height:100%;display:block;}
+  /* 主選單 */
   #hub{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
     justify-content:center;gap:22px;padding:24px;background:var(--bg);}
   #hub h1{font-size:min(46px,7vw);color:var(--gold);margin:0;}
@@ -46,16 +47,9 @@
   .c3{background:linear-gradient(160deg,#ffb0b0,#ff7a6a);}
   #bottom{margin-top:auto;}
   #bottom.hide{display:none;}
+  /* 上傳狀態小提示 */
   #syncStatus{font-size:12px;color:var(--dim);opacity:.85;}
   #syncStatus.err{color:var(--red-br);}
-  .volume-control{display:flex;align-items:center;gap:6px;background:var(--track);padding:4px 10px;border-radius:20px;}
-  .volume-control input[type="range"]{width:60px;height:4px;background:var(--dim);border-radius:2px;padding:0;margin:0;}
-  .volume-control input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--gold);cursor:pointer;}
-  .vol-icon{font-size:16px;cursor:pointer;}
-  .music-indicator{font-size:11px;color:var(--dim);padding:2px 10px;border-radius:12px;background:var(--track);}
-  .music-progress{font-size:10px;color:var(--dim-lt);padding:2px 6px;}
-  .tempo-display{font-size:10px;color:var(--gold);padding:2px 6px;}
-  .section-display{font-size:10px;color:#7fe08d;padding:2px 6px;}
 </style>
 </head>
 <body>
@@ -64,14 +58,6 @@
     <button id="connectBtn" class="btn-gold btn-md">連接裝置</button>
     <span id="status">未連線 · 可用「↑ ↓ 方向鍵」試玩</span>
     <span class="spacer"></span>
-    <span class="music-indicator" id="musicLabel">🎵 選單音樂</span>
-    <span class="tempo-display" id="tempoDisplay">♩=72</span>
-    <span class="section-display" id="sectionDisplay">前奏</span>
-    <span class="music-progress" id="musicProgress"></span>
-    <div class="volume-control">
-      <span class="vol-icon" id="muteBtn">🔊</span>
-      <input type="range" id="volumeSlider" min="0" max="100" value="60" />
-    </div>
     <span id="syncStatus"></span>
     <label>姓名 / 編號</label>
     <input id="name" maxlength="12" size="8" placeholder="使用者" />
@@ -118,1089 +104,132 @@ import taiko from "./game_taiko.js";
 const GAMES = { angrybird, balloon, taiko };
 const ONSET = 12;
 
-// ================= 🎵 音樂系統（完整版） =================
-class MusicAndSoundManager {
-  constructor() {
-    this.ctx = null;
-    this.isInitialized = false;
-    this.isMuted = false;
-    this.masterVolume = 0.6;
-    this.sfxVolume = 0.9;
-    this.bgmVolume = 0.25;
-    
-    this.bgmNodes = [];
-    this.bgmInterval = null;
-    this.currentBgm = null;
-    this.isBgmPlaying = false;
-    this.musicLabel = document.getElementById('musicLabel');
-    this.musicProgress = document.getElementById('musicProgress');
-    this.tempoDisplay = document.getElementById('tempoDisplay');
-    this.sectionDisplay = document.getElementById('sectionDisplay');
-    this.currentSectionIndex = 0;
-    this.beatInSection = 0;
-    this.totalBeats = 0;
-    
-    this.chargeTone = null;
-    this.chargeGain = null;
-    this.isCharging = false;
-  }
-
-  async init() {
-    if (this.isInitialized) return;
-    try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      if (this.ctx.state === 'suspended') {
-        await this.ctx.resume();
-      }
-      this.isInitialized = true;
-      console.log('🎵 音樂音效系統就緒');
-    } catch(e) {
-      console.warn('初始化失敗:', e);
-    }
-  }
-
-  // ============ 🎹 樂器音色 ============
-  
-  playPiano(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.9;
-        gain.gain.setValueAtTime(vol * 0.01, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.015);
-        gain.gain.exponentialRampToValueAtTime(vol * 0.25, this.ctx.currentTime + duration * 0.3);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playStrings(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const mod = this.ctx.createOscillator();
-        const modGain = this.ctx.createGain();
-        mod.frequency.value = 5.5;
-        modGain.gain.value = 3;
-        mod.connect(modGain);
-        modGain.connect(osc.frequency);
-        mod.start();
-        mod.stop(this.ctx.currentTime + duration);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
-        gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.08);
-        gain.gain.setValueAtTime(vol, this.ctx.currentTime + duration * 0.6);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, mod);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playFlute(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.8;
-        gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.04);
-        gain.gain.setValueAtTime(vol * 0.85, this.ctx.currentTime + duration * 0.5);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playTrumpet(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.7;
-        gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.02);
-        gain.gain.setValueAtTime(vol * 0.7, this.ctx.currentTime + duration * 0.3);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playBass(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.6;
-        gain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(vol, this.ctx.currentTime + 0.03);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playDrum(freq, dur, vol, delay = 0) {
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'square';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        const v = vol * this.sfxVolume * this.masterVolume * 0.5;
-        gain.gain.setValueAtTime(v, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + dur);
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + dur);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  playBell(freq, duration, volume, delay = 0) {
-    if (!freq || freq === 0 || !this.isInitialized) return;
-    setTimeout(() => {
-      if (this.isMuted || !this.isInitialized) return;
-      try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-        
-        const mod = this.ctx.createOscillator();
-        const modGain = this.ctx.createGain();
-        mod.frequency.value = 7;
-        modGain.gain.value = 2;
-        mod.connect(modGain);
-        modGain.connect(osc.frequency);
-        mod.start();
-        mod.stop(this.ctx.currentTime + duration);
-        
-        const vol = volume * this.sfxVolume * this.masterVolume * 0.6;
-        gain.gain.setValueAtTime(vol, this.ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-        
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + duration);
-        if (this.isBgmPlaying) this.bgmNodes.push(osc, mod);
-      } catch(e) {}
-    }, delay * 1000);
-  }
-
-  // ============ 🎵 1. 選單音樂 - 「晨光」 ============
-  playMenuMusic() {
-    this.stopBgm();
-    if (this.isMuted) return;
-    this.musicLabel.textContent = '🎵 晨光';
-    this.currentSectionIndex = 0;
-    this.beatInSection = 0;
-
-    // 旋律數據：[頻率, 時值(拍)]，時值 1=四分音符
-    const MELODY = {
-      intro: [
-        [523,1],[587,1],[659,1],[784,1],
-        [659,0.5],[587,0.5],[523,1.5],[0,0.5],[0,0.5],
-        [523,1],[659,1],[784,1],[880,1],
-        [784,0.5],[659,0.5],[587,1],[523,2],
-        [659,0.75],[784,0.25],[880,1],[988,1],
-        [880,0.5],[784,1],[659,1],[0,0.5],[0,0.5],
-        [784,0.5],[880,0.5],[988,0.5],[1047,0.5],
-        [988,1],[880,1],[784,1],[659,1]
-      ],
-      verse: [
-        [523,0.5],[0,0.5],[587,0.5],[0,0.5],[659,0.5],[0,0.5],[784,0.5],[0,0.5],
-        [659,0.25],[0,0.25],[587,0.25],[0,0.25],[523,0.5],[0,0.5],[0,1],
-        [523,0.75],[659,0.25],[784,1],[0,1],
-        [784,0.5],[659,0.5],[587,0.5],[523,1.5],
-        [523,0.5],[587,0.5],[659,0.5],[0,1.5],
-        [659,0.5],[784,0.5],[880,1],[0,0.5],[0,0.5],
-        [523,1],[659,1],[784,1],[880,1],
-        [784,0.5],[659,0.5],[587,0.5],[523,1.5],
-        [523,0.5],[587,0.5],[659,0.5],[0,0.5],[0,1],
-        [659,0.25],[784,0.25],[880,0.25],[0,0.25],[0,0.5],[0,0.5],[0,1],
-        [523,1.5],[659,0.5],[784,1],[0,1],
-        [784,0.5],[659,0.5],[587,0.5],[523,1.5],
-        [523,0.5],[587,0.5],[659,0.5],[784,0.5],
-        [659,1],[587,1],[523,0.5],[0,0.5],
-        [523,1],[659,1],[784,0.5],[880,0.5],
-        [784,0.5],[659,0.5],[587,0.5],[523,1.5]
-      ],
-      prechorus: [
-        [587,0.25],[659,0.25],[784,0.25],[0,0.25],[587,0.25],[659,0.25],[784,0.25],[0,0.25],
-        [659,0.25],[784,0.25],[880,0.25],[0,0.25],[659,0.25],[784,0.25],[880,0.25],[0,0.25],
-        [587,1],[659,1],[784,1],[880,1],
-        [784,0.5],[659,0.5],[587,1],[0,1],
-        [659,0.5],[784,0.5],[880,0.5],[988,0.5],
-        [880,0.5],[784,0.5],[659,1],[0,0.5],[0,0.5],
-        [784,0.25],[880,0.25],[988,0.25],[1047,0.25],[988,0.25],[880,0.25],[784,0.25],[0,0.25],
-        [988,1],[880,1],[784,0.5],[659,0.5]
-      ],
-      chorus: [
-        [523,0.5],[659,0.5],[784,0.5],[880,0.5],
-        [784,0.5],[659,0.5],[523,1.5],[0,0.5],
-        [659,0.5],[784,0.5],[880,0.5],[988,0.5],
-        [880,0.5],[784,0.5],[659,1.5],[0,0.5],
-        [523,0.25],[659,0.25],[880,0.25],[1047,0.25],[880,0.25],[659,0.25],[523,0.25],[0,0.25],
-        [659,0.25],[880,0.25],[1047,0.25],[1175,0.25],[1047,0.25],[880,0.25],[659,0.25],[0,0.25],
-        [523,1],[659,1],[784,1],[880,1],
-        [784,0.5],[659,0.5],[523,1.5],[0,0.5],
-        [659,0.25],[784,0.25],[880,0.25],[988,0.25],[880,0.25],[784,0.25],[659,0.25],[0,0.25],
-        [659,0.25],[784,0.25],[880,0.25],[988,0.25],[880,0.25],[784,0.25],[659,0.25],[0,0.25],
-        [523,0.25],[659,0.25],[880,0.25],[1047,0.25],[880,0.25],[659,0.25],[523,0.25],[0,0.25],
-        [659,0.25],[880,0.25],[1047,0.25],[1175,0.25],[1047,0.25],[880,0.25],[659,0.25],[0,0.25],
-        [523,0.5],[659,0.5],[784,0.5],[880,0.5],
-        [784,0.5],[659,0.5],[587,0.5],[523,0.5],
-        [523,1],[659,0.5],[784,0.5],[880,1],
-        [784,0.5],[659,0.5],[587,0.5],[523,0.5]
-      ],
-      bridge: [
-        [392,1],[440,1],[523,1],[0,1],
-        [392,1],[440,1],[523,1],[0,1],
-        [440,0.75],[523,0.25],[587,1],[0,1],
-        [440,0.75],[523,0.25],[587,1],[0,1],
-        [392,1],[440,1],[523,1],[587,1],
-        [523,0.5],[440,0.5],[392,0.5],[0,0.5],
-        [440,0.5],[523,0.5],[587,0.5],[659,0.5],
-        [587,0.5],[523,0.5],[440,0.5],[0,0.5]
-      ],
-      outro: [
-        [523,1.5],[587,0.5],[659,1.5],[784,0.5],
-        [659,1],[587,1],[523,1.5],[0,0.5],
-        [523,1],[659,1],[784,1.5],[880,0.5],
-        [784,1],[659,1],[523,1.5],[0,0.5],
-        [523,2],[587,1],[659,1],[0,0.5],[0,0.5],
-        [523,1.5],[659,0.5],[784,1.5],[0,0.5],
-        [523,2],[659,1.5],[784,0.5],[0,1],
-        [523,4],[0,0],[0,0],[0,0]
-      ]
-    };
-
-    const CHORDS = {
-      intro: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]],
-      verse: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]],
-      prechorus: [[523,659,784],[659,784,988],[784,988,1175],[880,1047,1319]],
-      chorus: [[523,659,784],[659,784,988],[784,988,1175],[880,1047,1319]],
-      bridge: [[392,523,659],[440,587,740],[523,659,784],[587,740,880]],
-      outro: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]]
-    };
-    const BASS = {
-      intro: [130,146,164,130],
-      verse: [130,146,146,164,130,146,164,130],
-      prechorus: [130,164,196,220],
-      chorus: [130,164,196,220,130,164,220,196],
-      bridge: [98,110,130,146],
-      outro: [130,146,164,130]
-    };
-
-    const sections = [
-      { name: '前奏', beats: 32, bpm: 68, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '主歌', beats: 64, bpm: 72, chordKey: 'verse', melodyKey: 'verse', bassKey: 'verse' },
-      { name: '導歌', beats: 32, bpm: 76, chordKey: 'prechorus', melodyKey: 'prechorus', bassKey: 'prechorus' },
-      { name: '副歌', beats: 64, bpm: 80, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '間奏', beats: 16, bpm: 72, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '橋段', beats: 32, bpm: 76, chordKey: 'bridge', melodyKey: 'bridge', bassKey: 'bridge' },
-      { name: '副歌2', beats: 48, bpm: 80, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '尾奏', beats: 32, bpm: 68, chordKey: 'outro', melodyKey: 'outro', bassKey: 'outro' }
-    ];
-
-    this.totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
-    let globalBeat = 0;
-    let currentSectionIdx = 0;
-    let beatInSection = 0;
-    let sectionBeats = sections[0].beats;
-    let noteIndex = 0;
-    let noteAccum = 0;
-    let lastTime = 0;
-    let accumulatedTime = 0;
-
-    this.currentBgm = 'menu';
-    this.isBgmPlaying = true;
-
-    const playLoop = (timestamp) => {
-      if (!this.isBgmPlaying || this.isMuted) {
-        this.bgmInterval = requestAnimationFrame(playLoop);
-        return;
-      }
-      if (lastTime === 0) lastTime = timestamp;
-      const delta = (timestamp - lastTime) / 1000;
-      lastTime = timestamp;
-
-      const section = sections[currentSectionIdx];
-      const BPM = section.bpm;
-      const beatDuration = 60 / BPM;
-      
-      accumulatedTime += delta;
-      
-      while (accumulatedTime >= beatDuration) {
-        accumulatedTime -= beatDuration;
-        
-        if (beatInSection >= sectionBeats) {
-          currentSectionIdx++;
-          if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
-          beatInSection = 0;
-          sectionBeats = sections[currentSectionIdx].beats;
-          noteIndex = 0;
-          noteAccum = 0;
-          this.sectionDisplay.textContent = sections[currentSectionIdx].name;
-          this.currentBPM = sections[currentSectionIdx].bpm;
-          this.tempoDisplay.textContent = '♩=' + sections[currentSectionIdx].bpm;
-        }
-
-        const currentSection = sections[currentSectionIdx];
-        const vol = this.bgmVolume * this.masterVolume * 1.0;
-        const beat = beatInSection % 4;
-        const bar = Math.floor(beatInSection / 4);
-
-        // 和弦（每小節第一拍）
-        if (beat === 0) {
-          const chordList = CHORDS[currentSection.chordKey];
-          const chordIdx = bar % chordList.length;
-          chordList[chordIdx].forEach((f, i) => {
-            this.playPiano(f, beatDuration * 1.5, vol * (0.3 - i * 0.04), i * 0.02);
-          });
-          const bassList = BASS[currentSection.bassKey];
-          this.playBass(bassList[bar % bassList.length], beatDuration * 2, vol * 0.25, 0.05);
-        }
-
-        // 旋律（根據時值播放）
-        const melodyList = MELODY[currentSection.melodyKey];
-        if (noteIndex < melodyList.length) {
-          const note = melodyList[noteIndex];
-          if (note && note[0] > 0) {
-            const dur = note[1] * beatDuration;
-            if (currentSection.name === '前奏' || currentSection.name === '尾奏') {
-              this.playFlute(note[0], dur, vol * 0.45, 0);
-            } else if (currentSection.name === '副歌' || currentSection.name === '副歌2') {
-              this.playTrumpet(note[0], dur, vol * 0.5, 0);
-              this.playStrings(note[0] * 2, dur * 0.5, vol * 0.1, 0.02);
-            } else {
-              this.playPiano(note[0], dur, vol * 0.45, 0);
-            }
-          }
-          noteAccum += note[1];
-          if (noteAccum >= 4) {
-            noteAccum -= 4;
-            noteIndex++;
-          }
-        }
-
-        // 打擊樂（副歌）
-        if (currentSection.name === '副歌' || currentSection.name === '副歌2') {
-          if (beat === 0 || beat === 2) this.playDrum(75, 0.1, vol * 0.3, 0);
-          if (beat === 2) this.playDrum(140, 0.04, vol * 0.15, 0.02);
-          if (beat === 0 && bar % 4 === 0) this.playDrum(55, 0.12, vol * 0.2, 0.04);
-          if (beat === 0 && bar % 2 === 0) this.playBell(1319, 0.08, vol * 0.08, 0);
-        }
-
-        beatInSection++;
-        globalBeat++;
-        const progress = Math.round((globalBeat / this.totalBeats) * 100);
-        this.musicProgress.textContent = progress + '%';
-      }
-
-      this.bgmInterval = requestAnimationFrame(playLoop);
-    };
-
-    this.bgmInterval = requestAnimationFrame(playLoop);
-  }
-
-  // ============ 🎵 2. 彈弓鳥 - 「征途」 ============
-  playAngrybirdMusic() {
-    this.stopBgm();
-    if (this.isMuted) return;
-    this.musicLabel.textContent = '🎵 征途';
-    this.currentSectionIndex = 0;
-    this.beatInSection = 0;
-
-    const MELODY = {
-      intro: [
-        [392,1],[440,1],[523,1],[0,1],
-        [392,1],[440,1],[523,1],[0,1],
-        [523,0.5],[587,0.5],[659,0.5],[0,0.5],
-        [523,0.5],[440,0.5],[392,0.5],[0,0.5]
-      ],
-      verse: [
-        [392,0.5],[440,0.5],[523,0.5],[0,0.5],[392,0.5],[440,0.5],[523,0.5],[0,0.5],
-        [523,0.5],[587,0.5],[659,0.5],[0,0.5],[523,0.5],[440,0.5],[392,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[523,0.5],[0,0.5],[392,0.5],[440,0.5],[523,0.5],[0,0.5],
-        [523,0.5],[587,0.5],[659,0.5],[0,0.5],[523,0.5],[440,0.5],[392,1.5],[0,0.5]
-      ],
-      chorus: [
-        [523,0.5],[659,0.5],[880,0.5],[0,0.5],[659,0.5],[523,0.5],[440,0.5],[0,0.5],
-        [523,0.5],[659,0.5],[880,0.5],[0,0.5],[659,0.5],[523,0.5],[440,0.5],[0,0.5],
-        [523,0.25],[659,0.25],[880,0.25],[1047,0.25],[880,0.25],[659,0.25],[523,0.25],[0,0.25],
-        [659,0.25],[880,0.25],[1047,0.25],[1175,0.25],[1047,0.25],[880,0.25],[659,0.25],[0,0.25]
-      ],
-      bridge: [
-        [392,1],[440,1],[523,1],[0,1],
-        [440,1],[523,1],[587,1],[0,1],
-        [392,0.5],[440,0.5],[523,0.5],[587,0.5],
-        [523,0.5],[440,0.5],[392,0.5],[0,0.5]
-      ],
-      outro: [
-        [392,1],[440,1],[523,0.5],[0,0.5],
-        [392,1],[440,1],[523,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[523,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[523,1.5],[0,0.5]
-      ]
-    };
-
-    const CHORDS = {
-      intro: [[392,523,659],[440,587,740],[523,659,880],[392,523,659]],
-      verse: [[392,523,659],[440,587,740],[523,659,880],[392,523,659]],
-      chorus: [[523,659,880],[587,740,880],[659,880,1047],[523,659,880]],
-      bridge: [[392,523,659],[440,587,740],[523,659,784],[587,740,880]],
-      outro: [[392,523,659],[440,587,740],[523,659,880],[392,523,659]]
-    };
-    const BASS = {
-      intro: [98,110,130,98],
-      verse: [98,110,130,98,98,110,130,98],
-      chorus: [130,146,164,130,130,146,164,130],
-      bridge: [98,110,130,146],
-      outro: [98,110,130,98]
-    };
-
-    const sections = [
-      { name: '前奏', beats: 16, bpm: 90, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '主歌', beats: 32, bpm: 100, chordKey: 'verse', melodyKey: 'verse', bassKey: 'verse' },
-      { name: '副歌', beats: 32, bpm: 110, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '間奏', beats: 16, bpm: 100, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '橋段', beats: 16, bpm: 106, chordKey: 'bridge', melodyKey: 'bridge', bassKey: 'bridge' },
-      { name: '副歌2', beats: 24, bpm: 110, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '尾奏', beats: 16, bpm: 90, chordKey: 'outro', melodyKey: 'outro', bassKey: 'outro' }
-    ];
-
-    this.totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
-    let globalBeat = 0;
-    let currentSectionIdx = 0;
-    let beatInSection = 0;
-    let sectionBeats = sections[0].beats;
-    let noteIndex = 0;
-    let noteAccum = 0;
-    let lastTime = 0;
-    let accumulatedTime = 0;
-
-    this.currentBgm = 'angrybird';
-    this.isBgmPlaying = true;
-
-    const playLoop = (timestamp) => {
-      if (!this.isBgmPlaying || this.isMuted) {
-        this.bgmInterval = requestAnimationFrame(playLoop);
-        return;
-      }
-      if (lastTime === 0) lastTime = timestamp;
-      const delta = (timestamp - lastTime) / 1000;
-      lastTime = timestamp;
-
-      const section = sections[currentSectionIdx];
-      const BPM = section.bpm;
-      const beatDuration = 60 / BPM;
-      
-      accumulatedTime += delta;
-      
-      while (accumulatedTime >= beatDuration) {
-        accumulatedTime -= beatDuration;
-        
-        if (beatInSection >= sectionBeats) {
-          currentSectionIdx++;
-          if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
-          beatInSection = 0;
-          sectionBeats = sections[currentSectionIdx].beats;
-          noteIndex = 0;
-          noteAccum = 0;
-          this.sectionDisplay.textContent = sections[currentSectionIdx].name;
-          this.currentBPM = sections[currentSectionIdx].bpm;
-          this.tempoDisplay.textContent = '♩=' + sections[currentSectionIdx].bpm;
-        }
-
-        const currentSection = sections[currentSectionIdx];
-        const vol = this.bgmVolume * this.masterVolume * 1.0;
-        const beat = beatInSection % 4;
-        const bar = Math.floor(beatInSection / 4);
-
-        if (beat === 0) {
-          const chordList = CHORDS[currentSection.chordKey];
-          const chordIdx = bar % chordList.length;
-          chordList[chordIdx].forEach((f, i) => {
-            this.playTrumpet(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
-          });
-          const bassList = BASS[currentSection.bassKey];
-          this.playBass(bassList[bar % bassList.length], beatDuration * 1.5, vol * 0.2, 0.05);
-          if (currentSection.name === '副歌' || currentSection.name === '副歌2') {
-            this.playDrum(75, 0.1, vol * 0.25, 0);
-          }
-        }
-
-        const melodyList = MELODY[currentSection.melodyKey];
-        if (noteIndex < melodyList.length) {
-          const note = melodyList[noteIndex];
-          if (note && note[0] > 0) {
-            const dur = note[1] * beatDuration;
-            this.playTrumpet(note[0], dur, vol * 0.45, 0);
-            this.playStrings(note[0] + 3, dur * 0.5, vol * 0.1, 0.02);
-          }
-          noteAccum += note[1];
-          if (noteAccum >= 4) { noteAccum -= 4; noteIndex++; }
-        }
-
-        beatInSection++;
-        globalBeat++;
-        const progress = Math.round((globalBeat / this.totalBeats) * 100);
-        this.musicProgress.textContent = progress + '%';
-      }
-      this.bgmInterval = requestAnimationFrame(playLoop);
-    };
-    this.bgmInterval = requestAnimationFrame(playLoop);
-  }
-
-  // ============ 🎵 3. 吹氣球 - 「嘉年華」 ============
-  playBalloonMusic() {
-    this.stopBgm();
-    if (this.isMuted) return;
-    this.musicLabel.textContent = '🎵 嘉年華';
-    this.currentSectionIndex = 0;
-    this.beatInSection = 0;
-
-    const MELODY = {
-      intro: [
-        [523,1],[659,1],[784,1],[0,1],
-        [523,1],[659,1],[784,1],[0,1],
-        [523,0.5],[659,0.5],[784,0.5],[0,0.5],
-        [523,0.5],[659,0.5],[784,1.5],[0,0.5]
-      ],
-      verse: [
-        [523,0.25],[587,0.25],[659,0.5],[0,0.5],[523,0.25],[587,0.25],[659,0.5],[0,0.5],
-        [659,0.25],[784,0.25],[880,0.5],[0,0.5],[659,0.25],[587,0.25],[523,0.5],[0,0.5],
-        [523,0.25],[659,0.25],[784,0.5],[0,0.5],[523,0.25],[587,0.25],[659,0.5],[0,0.5],
-        [659,0.25],[784,0.25],[880,0.5],[0,0.5],[659,0.25],[587,0.25],[523,1.5],[0,0.5]
-      ],
-      chorus: [
-        [523,0.25],[659,0.25],[784,0.25],[880,0.25],[784,0.25],[659,0.25],[523,0.25],[0,0.25],
-        [523,0.25],[659,0.25],[880,0.25],[1047,0.25],[880,0.25],[659,0.25],[523,0.25],[0,0.25],
-        [523,0.5],[659,0.5],[784,0.5],[880,0.5],
-        [784,0.5],[659,0.5],[523,1.5],[0,0.5]
-      ],
-      bridge: [
-        [392,1],[440,1],[523,1],[0,1],
-        [440,1],[523,1],[587,1],[0,1],
-        [392,0.5],[440,0.5],[523,0.5],[587,0.5],
-        [523,0.5],[440,0.5],[392,0.5],[0,0.5]
-      ],
-      outro: [
-        [523,1],[659,1],[784,0.5],[0,0.5],
-        [523,1],[659,1],[784,0.5],[0,0.5],
-        [523,0.5],[659,0.5],[784,0.5],[0,0.5],
-        [523,0.5],[659,0.5],[784,2],[0,0]
-      ]
-    };
-
-    const CHORDS = {
-      intro: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]],
-      verse: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]],
-      chorus: [[523,659,784],[659,784,988],[784,988,1175],[880,1047,1319]],
-      bridge: [[392,523,659],[440,587,740],[523,659,784],[587,740,880]],
-      outro: [[523,659,784],[587,740,880],[659,784,988],[523,659,880]]
-    };
-    const BASS = {
-      intro: [130,146,164,130],
-      verse: [130,146,146,164,130,146,164,130],
-      chorus: [130,164,196,220,130,164,220,196],
-      bridge: [98,110,130,146],
-      outro: [130,146,164,130]
-    };
-
-    const sections = [
-      { name: '前奏', beats: 16, bpm: 110, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '主歌', beats: 32, bpm: 120, chordKey: 'verse', melodyKey: 'verse', bassKey: 'verse' },
-      { name: '副歌', beats: 32, bpm: 132, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '間奏', beats: 16, bpm: 120, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '橋段', beats: 16, bpm: 126, chordKey: 'bridge', melodyKey: 'bridge', bassKey: 'bridge' },
-      { name: '副歌2', beats: 24, bpm: 132, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '尾奏', beats: 16, bpm: 110, chordKey: 'outro', melodyKey: 'outro', bassKey: 'outro' }
-    ];
-
-    this.totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
-    let globalBeat = 0;
-    let currentSectionIdx = 0;
-    let beatInSection = 0;
-    let sectionBeats = sections[0].beats;
-    let noteIndex = 0;
-    let noteAccum = 0;
-    let lastTime = 0;
-    let accumulatedTime = 0;
-
-    this.currentBgm = 'balloon';
-    this.isBgmPlaying = true;
-
-    const playLoop = (timestamp) => {
-      if (!this.isBgmPlaying || this.isMuted) {
-        this.bgmInterval = requestAnimationFrame(playLoop);
-        return;
-      }
-      if (lastTime === 0) lastTime = timestamp;
-      const delta = (timestamp - lastTime) / 1000;
-      lastTime = timestamp;
-
-      const section = sections[currentSectionIdx];
-      const BPM = section.bpm;
-      const beatDuration = 60 / BPM;
-      
-      accumulatedTime += delta;
-      
-      while (accumulatedTime >= beatDuration) {
-        accumulatedTime -= beatDuration;
-        
-        if (beatInSection >= sectionBeats) {
-          currentSectionIdx++;
-          if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
-          beatInSection = 0;
-          sectionBeats = sections[currentSectionIdx].beats;
-          noteIndex = 0;
-          noteAccum = 0;
-          this.sectionDisplay.textContent = sections[currentSectionIdx].name;
-          this.currentBPM = sections[currentSectionIdx].bpm;
-          this.tempoDisplay.textContent = '♩=' + sections[currentSectionIdx].bpm;
-        }
-
-        const currentSection = sections[currentSectionIdx];
-        const vol = this.bgmVolume * this.masterVolume * 1.0;
-        const beat = beatInSection % 4;
-        const bar = Math.floor(beatInSection / 4);
-
-        if (beat === 0) {
-          const chordList = CHORDS[currentSection.chordKey];
-          const chordIdx = bar % chordList.length;
-          chordList[chordIdx].forEach((f, i) => {
-            this.playFlute(f, beatDuration * 1.2, vol * (0.3 - i * 0.04), i * 0.02);
-          });
-          const bassList = BASS[currentSection.bassKey];
-          this.playBass(bassList[bar % bassList.length], beatDuration * 1.5, vol * 0.2, 0.05);
-        }
-
-        const melodyList = MELODY[currentSection.melodyKey];
-        if (noteIndex < melodyList.length) {
-          const note = melodyList[noteIndex];
-          if (note && note[0] > 0) {
-            const dur = note[1] * beatDuration;
-            this.playFlute(note[0], dur, vol * 0.45, 0);
-            if (currentSection.name === '副歌' || currentSection.name === '副歌2') {
-              this.playStrings(note[0] * 2, dur * 0.3, vol * 0.1, 0.01);
-            }
-          }
-          noteAccum += note[1];
-          if (noteAccum >= 4) { noteAccum -= 4; noteIndex++; }
-        }
-
-        beatInSection++;
-        globalBeat++;
-        const progress = Math.round((globalBeat / this.totalBeats) * 100);
-        this.musicProgress.textContent = progress + '%';
-      }
-      this.bgmInterval = requestAnimationFrame(playLoop);
-    };
-    this.bgmInterval = requestAnimationFrame(playLoop);
-  }
-
-  // ============ 🎵 4. 太鼓 - 「祭典」 ============
-  playTaikoMusic() {
-    this.stopBgm();
-    if (this.isMuted) return;
-    this.musicLabel.textContent = '🎵 祭典';
-    this.currentSectionIndex = 0;
-    this.beatInSection = 0;
-
-    const MELODY = {
-      intro: [
-        [294,1],[392,1],[440,1],[0,1],
-        [294,1],[392,1],[440,1],[0,1],
-        [294,0.5],[392,0.5],[440,0.5],[0,0.5],
-        [294,0.5],[392,0.5],[440,1.5],[0,0.5]
-      ],
-      verse: [
-        [294,0.5],[330,0.5],[392,0.5],[0,0.5],[294,0.5],[330,0.5],[392,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[494,0.5],[0,0.5],[392,0.5],[330,0.5],[294,0.5],[0,0.5],
-        [294,0.5],[330,0.5],[392,0.5],[0,0.5],[294,0.5],[330,0.5],[392,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[494,0.5],[0,0.5],[392,0.5],[330,0.5],[294,1.5],[0,0.5]
-      ],
-      chorus: [
-        [392,0.5],[440,0.5],[494,0.5],[588,0.5],[494,0.5],[440,0.5],[392,0.5],[0,0.5],
-        [392,0.5],[494,0.5],[588,0.5],[659,0.5],[588,0.5],[494,0.5],[392,0.5],[0,0.5],
-        [392,0.5],[440,0.5],[494,0.5],[588,0.5],
-        [494,0.5],[440,0.5],[392,1.5],[0,0.5]
-      ],
-      bridge: [
-        [294,1],[392,1],[440,1],[0,1],
-        [330,1],[440,1],[494,1],[0,1],
-        [294,0.5],[392,0.5],[440,0.5],[494,0.5],
-        [440,0.5],[392,0.5],[294,0.5],[0,0.5]
-      ],
-      outro: [
-        [294,1],[392,1],[440,0.5],[0,0.5],
-        [294,1],[392,1],[440,0.5],[0,0.5],
-        [294,0.5],[392,0.5],[440,0.5],[0,0.5],
-        [294,0.5],[392,0.5],[440,2],[0,0]
-      ]
-    };
-
-    const CHORDS = {
-      intro: [[294,392,440],[330,440,494],[392,494,294],[440,294,330]],
-      verse: [[294,392,440],[330,440,494],[392,494,294],[440,294,330]],
-      chorus: [[294,392,440],[392,494,294],[440,294,330],[330,440,494]],
-      bridge: [[294,392,440],[330,440,494],[392,494,294],[440,294,330]],
-      outro: [[294,392,440],[330,440,494],[392,494,294],[440,294,330]]
-    };
-    const BASS = {
-      intro: [73,82,98,110],
-      verse: [73,82,98,110,73,82,98,110],
-      chorus: [73,98,110,82,73,98,82,73],
-      bridge: [73,82,98,110],
-      outro: [73,82,98,110]
-    };
-
-    const sections = [
-      { name: '前奏', beats: 16, bpm: 120, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '主歌', beats: 32, bpm: 130, chordKey: 'verse', melodyKey: 'verse', bassKey: 'verse' },
-      { name: '副歌', beats: 32, bpm: 142, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '間奏', beats: 16, bpm: 130, chordKey: 'intro', melodyKey: 'intro', bassKey: 'intro' },
-      { name: '橋段', beats: 16, bpm: 136, chordKey: 'bridge', melodyKey: 'bridge', bassKey: 'bridge' },
-      { name: '副歌2', beats: 24, bpm: 142, chordKey: 'chorus', melodyKey: 'chorus', bassKey: 'chorus' },
-      { name: '尾奏', beats: 16, bpm: 120, chordKey: 'outro', melodyKey: 'outro', bassKey: 'outro' }
-    ];
-
-    this.totalBeats = sections.reduce((sum, s) => sum + s.beats, 0);
-    let globalBeat = 0;
-    let currentSectionIdx = 0;
-    let beatInSection = 0;
-    let sectionBeats = sections[0].beats;
-    let noteIndex = 0;
-    let noteAccum = 0;
-    let lastTime = 0;
-    let accumulatedTime = 0;
-
-    this.currentBgm = 'taiko';
-    this.isBgmPlaying = true;
-
-    const playLoop = (timestamp) => {
-      if (!this.isBgmPlaying || this.isMuted) {
-        this.bgmInterval = requestAnimationFrame(playLoop);
-        return;
-      }
-      if (lastTime === 0) lastTime = timestamp;
-      const delta = (timestamp - lastTime) / 1000;
-      lastTime = timestamp;
-
-      const section = sections[currentSectionIdx];
-      const BPM = section.bpm;
-      const beatDuration = 60 / BPM;
-      
-      accumulatedTime += delta;
-      
-      while (accumulatedTime >= beatDuration) {
-        accumulatedTime -= beatDuration;
-        
-        if (beatInSection >= sectionBeats) {
-          currentSectionIdx++;
-          if (currentSectionIdx >= sections.length) { currentSectionIdx = 0; globalBeat = 0; }
-          beatInSection = 0;
-          sectionBeats = sections[currentSectionIdx].beats;
-          noteIndex = 0;
-          noteAccum = 0;
-          this.sectionDisplay.textContent = sections[currentSectionIdx].name;
-          this.currentBPM = sections[currentSectionIdx].bpm;
-          this.tempoDisplay.textContent = '♩=' + sections[currentSectionIdx].bpm;
-        }
-
-        const currentSection = sections[currentSectionIdx];
-        const vol = this.bgmVolume * this.masterVolume * 1.0;
-        const beat = beatInSection % 4;
-        const bar = Math.floor(beatInSection / 4);
-
-        if (beat === 0) {
-          const chordList = CHORDS[currentSection.chordKey];
-          const chordIdx = bar % chordList.length;
-          chordList[chordIdx].forEach((f, i) => {
-            this.playFlute(f, beatDuration * 1.2, vol * (0.25 - i * 0.04), i * 0.02);
-          });
-          const bassList = BASS[currentSection.bassKey];
-          this.playBass(bassList[bar % bassList.length], beatDuration * 1.5, vol * 0.2, 0.05);
-        }
-
-        // 太鼓節奏
-        if (beat === 0 || beat === 2) {
-          this.playDrum(75, 0.1, vol * 0.3, 0);
-          this.playDrum(140, 0.04, vol * 0.15, 0.03);
-        }
-        if (beat === 0 && bar % 4 === 0) {
-          this.playDrum(55, 0.12, vol * 0.2, 0.05);
-          this.playDrum(165, 0.05, vol * 0.1, 0.1);
-        }
-
-        const melodyList = MELODY[currentSection.melodyKey];
-        if (noteIndex < melodyList.length) {
-          const note = melodyList[noteIndex];
-          if (note && note[0] > 0) {
-            const dur = note[1] * beatDuration;
-            this.playFlute(note[0], dur, vol * 0.4, 0);
-          }
-          noteAccum += note[1];
-          if (noteAccum >= 4) { noteAccum -= 4; noteIndex++; }
-        }
-
-        beatInSection++;
-        globalBeat++;
-        const progress = Math.round((globalBeat / this.totalBeats) * 100);
-        this.musicProgress.textContent = progress + '%';
-      }
-      this.bgmInterval = requestAnimationFrame(playLoop);
-    };
-    this.bgmInterval = requestAnimationFrame(playLoop);
-  }
-
-  // ============ 播放控制 ============
-  
-  playBgm(style = 'menu') {
-    this.stopBgm();
-    switch(style) {
-      case 'menu': this.playMenuMusic(); break;
-      case 'angrybird': this.playAngrybirdMusic(); break;
-      case 'balloon': this.playBalloonMusic(); break;
-      case 'taiko': this.playTaikoMusic(); break;
-      default: this.playMenuMusic();
-    }
-  }
-
-  stopBgm() {
-    this.isBgmPlaying = false;
-    if (this.bgmInterval) {
-      cancelAnimationFrame(this.bgmInterval);
-      this.bgmInterval = null;
-    }
-    this.bgmNodes.forEach(node => {
-      try { node.stop(); } catch(e) {}
-    });
-    this.bgmNodes = [];
-    this.musicProgress.textContent = '';
-  }
-
-  // ============ 彈弓鳥蓄力音效 ============
-  startCharge() {
-    if (this.isCharging) return;
-    if (this.isMuted || !this.isInitialized) return;
-    try {
-      this.isCharging = true;
-      this.chargeTone = this.ctx.createOscillator();
-      this.chargeGain = this.ctx.createGain();
-      this.chargeTone.type = 'sawtooth';
-      this.chargeTone.frequency.setValueAtTime(200, this.ctx.currentTime);
-      this.chargeGain.gain.setValueAtTime(0.001, this.ctx.currentTime);
-      this.chargeTone.connect(this.chargeGain);
-      this.chargeGain.connect(this.ctx.destination);
-      this.chargeTone.start();
-      this.chargeTargetVolume = 0.15 * this.sfxVolume * this.masterVolume;
-    } catch(e) {}
-  }
-
-  updateCharge(flow) {
-    if (!this.isCharging || !this.chargeGain) return;
-    if (this.isMuted) return;
-    try {
-      const maxFlow = 150;
-      const ratio = Math.min(1, flow / maxFlow);
-      const volume = 0.001 + ratio * this.chargeTargetVolume;
-      this.chargeGain.gain.setValueAtTime(volume, this.ctx.currentTime);
-      const freq = 200 + ratio * 400;
-      this.chargeTone.frequency.setValueAtTime(freq, this.ctx.currentTime);
-    } catch(e) {}
-  }
-
-  stopCharge() {
-    if (!this.isCharging) return;
-    this.isCharging = false;
-    try {
-      if (this.chargeGain) {
-        this.chargeGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
-      }
-      if (this.chargeTone) {
-        this.chargeTone.stop(this.ctx.currentTime + 0.06);
-      }
-    } catch(e) {}
-    this.chargeTone = null;
-    this.chargeGain = null;
-  }
-
-  // ============ 音效 ============
-  
-  playTone(freq = 440, duration = 0.15, type = 'sine', volume = 0.3, options = {}) {
-    if (this.isMuted || !this.isInitialized) return;
-    try {
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-      osc.type = type;
-      osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-      if (options.vibrato) {
-        const mod = this.ctx.createOscillator();
-        const modGain = this.ctx.createGain();
-        mod.frequency.value = options.vibratoSpeed || 5;
-        modGain.gain.value = options.vibratoAmount || 5;
-        mod.connect(modGain);
-        modGain.connect(osc.frequency);
-        mod.start();
-        mod.stop(this.ctx.currentTime + duration);
-      }
-      const vol = volume * this.sfxVolume * this.masterVolume;
-      gain.gain.setValueAtTime(vol, this.ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-      osc.start();
-      osc.stop(this.ctx.currentTime + duration);
-      if (this.isBgmPlaying) {
-        this.bgmNodes.push(osc);
-        setTimeout(() => {
-          this.bgmNodes = this.bgmNodes.filter(n => n !== osc);
-        }, duration * 1000 + 100);
-      }
-    } catch(e) {}
-  }
-
-  play(event, extra = {}) {
-    if (event === 'charge_start') { this.startCharge(); return; }
-    if (event === 'charge_update' && extra.flow !== undefined) { this.updateCharge(extra.flow); return; }
-    if (event === 'charge_stop') { this.stopCharge(); return; }
-
-    const sounds = {
-      'connect': () => { this.playTone(523, 0.1, 'sine', 0.4); 
-                         setTimeout(() => this.playTone(659, 0.1, 'sine', 0.35), 100); },
-      'disconnect': () => this.playTone(440, 0.15, 'sawtooth', 0.3),
-      'game_start': () => { this.playTone(523, 0.1, 'sine', 0.4);
-                           setTimeout(() => this.playTone(659, 0.1, 'sine', 0.4), 100);
-                           setTimeout(() => this.playTone(784, 0.15, 'sine', 0.4), 200); },
-      'back_menu': () => { this.playTone(659, 0.1, 'sine', 0.3);
-                           setTimeout(() => this.playTone(523, 0.1, 'sine', 0.3), 100); },
-      'click': () => this.playTone(880, 0.05, 'sine', 0.25),
-      'error': () => this.playTone(220, 0.3, 'sawtooth', 0.3),
-      'success': () => { this.playTone(880, 0.15, 'sine', 0.5);
-                         setTimeout(() => this.playTone(1100, 0.1, 'sine', 0.4), 120); },
-      'fail': () => this.playTone(220, 0.4, 'sawtooth', 0.3),
-      'record_break': () => { [523, 659, 784, 1047].forEach((f, i) => 
-                              setTimeout(() => this.playTone(f, 0.2, 'square', 0.3), i*100)); },
-      'breath_start': () => this.playTone(440, 0.05, 'sine', 0.25),
-      'breath_end': () => this.playTone(330, 0.05, 'sine', 0.25),
-      'breath_strong': () => this.playTone(660, 0.08, 'sine', 0.35),
-      'level_up': () => { this.playTone(523, 0.1, 'sine', 0.4);
-                          setTimeout(() => this.playTone(659, 0.1, 'sine', 0.4), 100);
-                          setTimeout(() => this.playTone(784, 0.15, 'sine', 0.4), 200);
-                          setTimeout(() => this.playTone(1047, 0.2, 'sine', 0.4), 300); },
-      'angrybird_launch': () => { this.playTone(400, 0.3, 'sawtooth', 0.4);
-                                  setTimeout(() => this.playTone(300, 0.2, 'sawtooth', 0.3), 150); },
-      'angrybird_wall': () => { this.playTone(100, 0.5, 'sawtooth', 0.5);
-                                for(let i=0; i<5; i++) {
-                                  setTimeout(() => this.playTone(300+Math.random()*200, 0.05, 'sine', 0.15), i*80);
-                                } },
-      'balloon_pop': () => this.playTone(1200, 0.05, 'sine', 0.3),
-      'balloon_fly': () => { this.playTone(800, 0.1, 'sine', 0.3);
-                             setTimeout(() => this.playTone(1000, 0.1, 'sine', 0.3), 100);
-                             setTimeout(() => this.playTone(1200, 0.15, 'sine', 0.3), 200); },
-      'balloon_deflate': () => this.playTone(300, 0.5, 'sawtooth', 0.25),
-      'balloon_90': () => this.playTone(440, 0.08, 'square', 0.25),
-      'taiko_great': () => { this.playTone(150, 0.1, 'square', 0.5);
-                             setTimeout(() => this.playTone(200, 0.1, 'square', 0.4), 80); },
-      'taiko_good': () => this.playTone(150, 0.15, 'square', 0.4),
-      'taiko_miss': () => this.playTone(80, 0.3, 'sawtooth', 0.3),
-      'taiko_clear': () => { [200, 250, 300, 400, 500].forEach((f, i) =>
-                              setTimeout(() => this.playTone(f, 0.1, 'square', 0.35), i*100)); },
-    };
-
-    const soundFn = sounds[event];
-    if (soundFn) soundFn();
-  }
-
-  setVolume(v) {
-    this.masterVolume = Math.max(0, Math.min(1, v));
-  }
-
-  toggleMute() {
-    this.isMuted = !this.isMuted;
-    if (this.isMuted) {
-      this.stopBgm();
-      this.stopCharge();
-      this.musicLabel.textContent = '🔇 靜音';
-    } else {
-      if (this.currentBgm) this.playBgm(this.currentBgm);
-    }
-    return this.isMuted;
-  }
-}
-
-const sound = new MusicAndSoundManager();
-
-// ================= 顏色 =================
+// ---------- 顏色(給遊戲用) ----------
 const COLORS = { bg:"#43111a", panel:"#5c1a26", header:"#370d14", track:"#2c0910",
   gold:"#ffd24a", goldDk:"#b8862a", red:"#e6402f", redBr:"#ff6a52",
   cream:"#fff3df", green:"#7fe08d", blue:"#5fb0ff", dim:"#e0b58f" };
 
+// =====================================================================
+//  音效引擎 (Web Audio API - 純程式碼合成，免載入外檔)
+// =====================================================================
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+}
+
+// 點擊UI時啟用 AudioContext
+window.addEventListener("click", initAudio, { once: true });
+window.addEventListener("keydown", initAudio, { once: true });
+
+const SFX = {
+  // 按鈕點擊音效
+  click() {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.05);
+  },
+  // 吹錯方向警告音
+  warning() {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+  },
+  // 彈弓發射聲 (Pitch Down Slide)
+  launch() {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+  },
+  // 城牆倒塌/爆破轟鳴聲
+  boom() {
+    if (!audioCtx) return;
+    const bufferSize = audioCtx.sampleRate * 0.5;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1; // 白雜訊
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(300, audioCtx.currentTime);
+    filter.frequency.linearRampToValueAtTime(50, audioCtx.currentTime + 0.5);
+    const gain = audioCtx.createGain();
+    gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+    noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+    noise.start(); noise.stop(audioCtx.currentTime + 0.5);
+  },
+  // 吹氣球連續充氣音 (頻率隨進度 size: 0~1 增加)
+  inflate(progress = 0) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(200 + progress * 300, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.08);
+  },
+  // 放飛成功/敲鐘叮叮聲 (金屬響亮短音)
+  victory() {
+    if (!audioCtx) return;
+    const freqs = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    freqs.forEach((f, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(f, audioCtx.currentTime + i * 0.08);
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime + i * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.08 + 0.4);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(audioCtx.currentTime + i * 0.08);
+      osc.stop(audioCtx.currentTime + i * 0.08 + 0.4);
+    });
+  },
+  // 太鼓敲擊聲 (drum)
+  taikoHit(isGreat = true) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(isGreat ? 150 : 220, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.12);
+    gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.12);
+  }
+};
+
 // ================= 雲端上傳 =================
 const LOG_ENDPOINT = "/api/log";
-const syncStatusEl = document.getElementById("syncStatus");
 
 function setSyncStatus(text, isErr=false){
   syncStatusEl.textContent = text;
@@ -1222,7 +251,7 @@ async function uploadLog(payload){
   }
 }
 
-// ================= 儲存 =================
+// ---------- 儲存 ----------
 const mem = {};
 const store = {
   get(k, def=null){ try{ const v=localStorage.getItem("bt_"+k); return v==null?def:JSON.parse(v); }
@@ -1233,18 +262,16 @@ const store = {
   },
 };
 
-// ================= 裝置連線 =================
+// ---------- 裝置連線 ----------
 let port=null, reader=null, keepReading=false, lastFFT=null, lastTs=0;
-const connectBtn=document.getElementById("connectBtn");
-const statusEl=document.getElementById("status");
-
 async function connect(){
+  initAudio();
+  SFX.click();
   if(port){ await disconnect(); return; }
   if(!("serial" in navigator)){ setStatus("此瀏覽器不支援 Web Serial,請用 Chrome/Edge","warn"); return; }
   try{ port=await navigator.serial.requestPort(); await port.open({baudRate:115200}); }
   catch{ setStatus("未選擇裝置 · 可用方向鍵試玩","warn"); port=null; return; }
   connectBtn.textContent="斷線"; setStatus("已連線","on"); keepReading=true; readLoop();
-  sound.play('connect');
   uploadLog({ type:"connect" });
 }
 async function disconnect(){
@@ -1252,7 +279,6 @@ async function disconnect(){
   try{ if(reader){ await reader.cancel(); reader.releaseLock(); } }catch{}
   try{ if(port){ await port.close(); } }catch{}
   port=null; reader=null; connectBtn.textContent="連接裝置"; setStatus("未連線 · 可用方向鍵試玩","");
-  sound.play('disconnect');
   uploadLog({ type:"disconnect" });
 }
 async function readLoop(){
@@ -1264,16 +290,17 @@ async function readLoop(){
       const b=parseFFTLine(ln); if(b){ lastFFT=b; lastTs=performance.now()/1000; } } }
 }
 
-function setStatus(t,cls=""){ statusEl.textContent="● "+t; statusEl.className=cls; }
-
-// ================= 鍵盤試玩 =================
+// ---------- 鍵盤試玩 ----------
 let upDown=false, dnDown=false, upFlow=0, dnFlow=0;
-addEventListener("keydown", e=>{ if(e.key==="ArrowUp"){upDown=true;e.preventDefault();}
+addEventListener("keydown", e=>{
+  initAudio();
+  if(e.key==="ArrowUp"){upDown=true;e.preventDefault();}
   if(e.key==="ArrowDown"){dnDown=true;e.preventDefault();}
-  if(e.code==="Space"){ onPrimary(); e.preventDefault(); } });
+  if(e.code==="Space"){ onPrimary(); e.preventDefault(); }
+});
 addEventListener("keyup", e=>{ if(e.key==="ArrowUp")upDown=false; if(e.key==="ArrowDown")dnDown=false; });
 
-// ================= 取樣即時輸入 =================
+// ---------- 取樣即時輸入 ----------
 const EXHALE_BIAS_WINDOW = 0.4;
 let exhaleBiasBuffer = [];
 
@@ -1305,7 +332,7 @@ function sample(now, dt){
   return { flow, direction, active, signed, now, dt };
 }
 
-// ================= 繪圖 helper =================
+// ---------- 繪圖 helper ----------
 const cv=document.getElementById("cv"), ctx=cv.getContext("2d");
 function resize(){ const r=cv.getBoundingClientRect(), dpr=devicePixelRatio||1;
   cv.width=r.width*dpr; cv.height=r.height*dpr; ctx.setTransform(dpr,0,0,dpr,0,0); }
@@ -1325,66 +352,44 @@ const g = {
     if(fill){ ctx.fillStyle=c; ctx.fill(); } else { ctx.strokeStyle=c; ctx.lineWidth=2; ctx.stroke(); } },
 };
 
-// ================= API 給遊戲 =================
-const nameEl = document.getElementById("name");
-const api = { 
-  colors: COLORS, 
-  store, 
-  ONSET,
+// ---------- API 給遊戲 ----------
+const api = { colors:COLORS, store, ONSET,
   name(){ return (nameEl.value.trim()||"使用者"); },
   back(){ toHub(); },
-  sound: sound,
 };
 
-// ================= 遊戲切換 =================
-let current=null, currentId=null, lastActive=false;
-const hub=document.getElementById("hub");
-const bottom=document.getElementById("bottom");
-const primary=document.getElementById("primary");
-
+// ---------- 遊戲切換 ----------
+let current=null, currentId=null;
 function startGame(id){
-  sound.init();
-  current = GAMES[id]; 
-  if(!current) return;
+  initAudio();
+  SFX.click();
+  current = GAMES[id]; if(!current) return;
   currentId = id;
-  hub.style.display="none"; 
-  bottom.classList.remove("hide");
+  hub.style.display="none"; bottom.classList.remove("hide");
   if(current.reset) current.reset(api);
-  primary.textContent = current.primaryLabel ? (current.primaryLabel() || "") : "";
-  primary.style.display = primary.textContent ? "" : "none";
+  primary.textContent = current.primaryLabel? (current.primaryLabel()||"") : "";
+  primary.style.display = primary.textContent? "" : "none";
   resize();
-  segActive=false; 
-  segSamples=[];
-  sound.play('game_start');
-  sound.playBgm(id);
+  segActive=false; segSamples=[];
   uploadLog({ type:"game_start", game:id });
 }
 
 function toHub(){
-  sound.play('back_menu');
-  sound.stopBgm();
-  sound.playBgm('menu');
-  current=null; 
-  currentId=null; 
-  hub.style.display="flex"; 
-  bottom.classList.add("hide");
-  segActive=false; 
-  segSamples=[];
+  initAudio();
+  SFX.click();
+  current=null; currentId=null; hub.style.display="flex"; bottom.classList.add("hide");
+  segActive=false; segSamples=[];
 }
 
 function onPrimary(){
-  if(current && current.primary){ 
-    current.primary(api);
-    sound.play('click');
-    if(current.primaryLabel){ 
-      const t = current.primaryLabel() || ""; 
-      primary.textContent = t;
-      primary.style.display = t ? "" : "none";
-    } 
-  }
+  initAudio();
+  SFX.click();
+  if(current && current.primary){ current.primary(api);
+  if(current.primaryLabel){ const t=current.primaryLabel()||""; primary.textContent=t;
+    primary.style.display=t?"":"none"; } }
 }
 
-// ================= 波形紀錄 =================
+// ---------- 波形紀錄 ----------
 const SEG_MIN_DURATION = 0.15;
 const SEG_MAX_POINTS = 150;
 let segActive=false, segStart=0, segSamples=[];
@@ -1400,8 +405,7 @@ function downsample(arr, maxPoints){
 function handleSegment(input){
   if(!current) { segActive=false; segSamples=[]; return; }
   if(input.active){
-    if(!segActive){ segActive=true; segStart=input.now; segSamples=[]; sound.play('breath_start'); }
-    if(input.flow > 80) sound.play('breath_strong');
+    if(!segActive){ segActive=true; segStart=input.now; segSamples=[]; }
     segSamples.push({
       t:+(input.now-segStart).toFixed(2),
       f:Math.round(input.flow),
@@ -1409,7 +413,6 @@ function handleSegment(input){
     });
   } else if(segActive){
     segActive=false;
-    sound.play('breath_end');
     const duration = input.now - segStart;
     if(duration>=SEG_MIN_DURATION && segSamples.length>0){
       uploadLog({ type:"attempt", game:currentId, duration:+duration.toFixed(2),
@@ -1419,59 +422,95 @@ function handleSegment(input){
   }
 }
 
-// ================= 主迴圈 =================
-let last=performance.now()/1000, lastScoreCheck=0;
+// =====================================================================
+//  音效監聽器：不用改動遊戲邏輯檔，直接在此捕捉狀態發聲
+// =====================================================================
+let prevGameState = {};
+let lastInflateTime = 0;
 
+function handleGameAudio(now, input) {
+  if (!current) return;
+
+  // 1. 方向錯誤警告聲 (共通)
+  // 如果子遊戲標示了 wrong 狀態
+  if (window.S && window.S.wrong && !prevGameState.wrong) {
+    SFX.warning();
+  }
+
+  // 2. 彈弓鳥音效
+  if (currentId === "angrybird" && window.S) {
+    if (window.S.phase === "flight" && prevGameState.phase === "aim") {
+      SFX.launch(); // 發射音效
+    }
+    if (window.S.wallBroken && !prevGameState.wallBroken) {
+      SFX.boom();   // 牆壁撞倒爆破音
+      SFX.victory();
+    }
+  }
+
+  // 3. 吹氣球音效
+  if (currentId === "balloon" && window.S) {
+    if (input.active && input.direction === "exhalation" && !window.S.flew) {
+      if (now - lastInflateTime > 0.1) {
+        SFX.inflate(window.S.size || 0); // 氣球充氣聲
+        lastInflateTime = now;
+      }
+    }
+    if (window.S.flew && !prevGameState.flew) {
+      SFX.victory(); // 放飛成功
+    }
+  }
+
+  // 4. 太鼓節奏音效
+  if (currentId === "taiko" && window.S) {
+    if (window.S.flash > 0.8 && (!prevGameState.flash || prevGameState.flash <= 0.8)) {
+      SFX.taikoHit(true); // 擊中良
+    }
+  }
+
+  // 紀錄前一幀狀態
+  if (window.S) {
+    prevGameState = { ...window.S };
+  }
+}
+
+// ---------- 主迴圈 ----------
+let last=performance.now()/1000;
 function loop(){
-  const now=performance.now()/1000; 
-  let dt=Math.min(now-last,0.1); 
-  last=now;
+  const now=performance.now()/1000; let dt=Math.min(now-last,0.1); last=now;
   const input=sample(now,dt);
   handleSegment(input);
+  handleGameAudio(now, input); // 播放對應音效
+
   const w=cv.clientWidth, h=cv.clientHeight;
   if(current){
-    if(current.getScore) {
-      const score = current.getScore();
-      if(score > lastScoreCheck && lastScoreCheck > 0) { sound.play('success'); }
-      lastScoreCheck = score;
-    }
-    if(current.update) current.update(dt, input, api);
+    if(current.update) current.update(dt,input,api);
     g.clear(COLORS.bg);
-    if(current.render) current.render(g, w, h, api);
-    if(current.primaryLabel){ 
-      const t = current.primaryLabel() || "";
-      if(primary.textContent !== t){ primary.textContent = t; primary.style.display = t ? "" : "none"; } 
-    }
+    if(current.render) current.render(g,w,h,api);
+    if(current.primaryLabel){ const t=current.primaryLabel()||"";
+      if(primary.textContent!==t){ primary.textContent=t; primary.style.display=t?"":"none"; } }
   }
   requestAnimationFrame(loop);
 }
 
-// ================= 綁定事件 =================
-connectBtn.onclick = connect;
-document.getElementById("backBtn").onclick = toHub;
-primary.onclick = onPrimary;
-document.querySelectorAll(".card").forEach(c => c.onclick = () => startGame(c.dataset.game));
-nameEl.value = store.get("name","") || "";
-nameEl.onchange = () => store.set("name", nameEl.value.trim());
-
-const volumeSlider = document.getElementById("volumeSlider");
-const muteBtn = document.getElementById("muteBtn");
-
-volumeSlider.oninput = () => {
-  const v = volumeSlider.value / 100;
-  sound.setVolume(v);
-  sound.play('click');
-};
-muteBtn.onclick = () => {
-  const muted = sound.toggleMute();
-  muteBtn.textContent = muted ? '🔇' : '🔊';
-  sound.play('click');
-};
-
+// ---------- 綁定 ----------
+const connectBtn=document.getElementById("connectBtn");
+const statusEl=document.getElementById("status");
+const syncStatusEl=document.getElementById("syncStatus");
+const nameEl=document.getElementById("name");
+const primary=document.getElementById("primary");
+const hub=document.getElementById("hub");
+const bottom=document.getElementById("bottom");
+function setStatus(t,cls=""){ statusEl.textContent="● "+t; statusEl.className=cls; }
+connectBtn.onclick=connect;
+document.getElementById("backBtn").onclick=toHub;
+primary.onclick=onPrimary;
+document.querySelectorAll(".card").forEach(c=> c.onclick=()=>startGame(c.dataset.game));
+nameEl.value = store.get("name","")||"";
+nameEl.onchange=()=> store.set("name", nameEl.value.trim());
 setStatus(`未連線 · 可用方向鍵試玩 · ${algoStatus()}`,"");
-sound.init().then(() => { sound.playBgm('menu'); });
-resize(); 
-loop();
+
+resize(); loop();
 </script>
 </body>
 </html>
