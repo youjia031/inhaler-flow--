@@ -50,16 +50,15 @@
   #syncStatus{font-size:12px;color:var(--dim);opacity:.85;}
   #syncStatus.err{color:var(--red-br);}
   
-  /* 音訊解鎖提示提示 Overlay */
   #audioHint {
-    position: fixed; bottom: 15px; right: 15px; background: rgba(0,0,0,0.7);
+    position: fixed; bottom: 15px; right: 15px; background: rgba(0,0,0,0.85);
     color: var(--gold); padding: 8px 16px; border-radius: 20px; font-size: 13px;
-    pointer-events: none; z-index: 999; transition: opacity 0.5s;
+    pointer-events: none; z-index: 999; transition: opacity 0.5s; border:1px solid var(--gold);
   }
 </style>
 </head>
 <body>
-<div id="audioHint">🎵 點擊任意處開啟音樂與音效</div>
+<div id="audioHint">🎵 點擊頁面任意處開始播放多樂器聲道音樂與音效</div>
 
 <div id="app">
   <div class="bar top">
@@ -117,12 +116,12 @@ const COLORS = { bg:"#43111a", panel:"#5c1a26", header:"#370d14", track:"#2c0910
   cream:"#fff3df", green:"#7fe08d", blue:"#5fb0ff", dim:"#e0b58f" };
 
 // =====================================================================
-//  Web Audio 音樂 (BGM) & 音效 (SFX) 引擎
+//  高階 Web Audio API 樂器合成引擎 (主歌 / 副歌 / 多聲部 / 鼓組)
 // =====================================================================
 let audioCtx = null;
-let currentBGM = "hub"; // "hub", "angrybird", "balloon", "taiko"
-let bgmStep = 0;
-let nextNoteTime = 0;
+let currentTrack = "hub";
+let beatIndex = 0;
+let nextBeatTime = 0;
 
 function ensureAudio() {
   if (!audioCtx) {
@@ -138,46 +137,143 @@ function ensureAudio() {
 window.addEventListener("click", ensureAudio);
 window.addEventListener("keydown", ensureAudio);
 
-// --- 和弦與旋律設定 ---
-const MUSIC_PATTERNS = {
-  hub: { bpm: 100, notes: [261.63, 329.63, 392.00, 523.25, 392.00, 329.63], type: "sine" },         // 溫和 C大調 (選單)
-  angrybird: { bpm: 125, notes: [146.83, 174.61, 220.00, 293.66, 220.00, 174.61], type: "triangle" }, // 緊張 D小調 (彈弓鳥)
-  balloon: { bpm: 90, notes: [196.00, 246.94, 293.66, 392.00, 329.63, 246.94], type: "sine" },      // 舒緩 G大調 (吹氣球)
-  taiko: { bpm: 135, notes: [220.00, 261.63, 329.63, 440.00, 329.63, 261.63], type: "square" }       // 節奏 A小調 (太鼓)
+// --- 音高定義 ---
+const N = {
+  C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.00, B3: 246.94,
+  C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.00, B4: 493.88,
+  C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.00, OFF: 0
 };
 
-// --- 自動音樂循環與排程器 ---
+// --- 四套獨立風格的樂曲（具備 A段主歌 / B段副歌 段落結構）---
+const TRACKS = {
+  // 1. 主選單：輕鬆舒適的 C 大調
+  hub: {
+    bpm: 108,
+    bass:   [N.C3, N.OFF, N.G3, N.OFF, N.A3, N.OFF, N.F3, N.OFF,  N.C3, N.OFF, N.E3, N.OFF, N.F3, N.G3, N.C3, N.OFF],
+    chords: [
+      [N.C4, N.E4, N.G4], [N.G3, N.B3, N.D4], [N.A3, N.C4, N.E4], [N.F3, N.A3, N.C4],
+      [N.C4, N.E4, N.G4], [N.E3, N.G3, N.B3], [N.F3, N.A3, N.C4], [N.C4, N.E4, N.G4]
+    ],
+    melodyA: [N.E5, N.G5, N.C5, N.D5, N.E5, N.OFF, N.D5, N.OFF, N.C5, N.E5, N.G5, N.A5, N.G5, N.OFF, N.E5, N.OFF], // 主歌
+    melodyB: [N.G5, N.A5, N.G5, N.E5, N.C5, N.D5, N.E5, N.G5, N.A5, N.C5, N.D5, N.E5, N.C5, N.OFF, N.OFF, N.OFF], // 副歌
+    drums: [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0]
+  },
+
+  // 2. 吸氣彈弓鳥：節奏感十足的熱血 D 小調
+  angrybird: {
+    bpm: 128,
+    bass:   [N.D3, N.D3, N.F3, N.G3, N.D3, N.D3, N.C3, N.C3, N.D3, N.D3, N.F3, N.G3, N.A3, N.A3, N.D3, N.OFF],
+    chords: [
+      [N.D4, N.F4, N.A4], [N.F4, N.A4, N.C5], [N.G4, N.B4, N.D5], [N.A4, N.C5, N.E5],
+      [N.D4, N.F4, N.A4], [N.C4, N.E4, N.G4], [N.G4, N.B4, N.D5], [N.D4, N.F4, N.A4]
+    ],
+    melodyA: [N.D5, N.F5, N.D5, N.A4, N.D5, N.F5, N.G5, N.OFF, N.F5, N.D5, N.C5, N.D5, N.F5, N.E5, N.D5, N.OFF],
+    melodyB: [N.A5, N.A5, N.G5, N.F5, N.G5, N.A5, N.D5, N.OFF, N.F5, N.G5, N.A5, N.C5, N.D5, N.OFF, N.OFF, N.OFF],
+    drums: [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1]
+  },
+
+  // 3. 吹氣球：輕柔慢板 G 大調
+  balloon: {
+    bpm: 88,
+    bass:   [N.G3, N.OFF, N.D3, N.OFF, N.E3, N.OFF, N.C3, N.OFF, N.G3, N.OFF, N.B3, N.OFF, N.C3, N.D3, N.G3, N.OFF],
+    chords: [
+      [N.G4, N.B4, N.D5], [N.D4, N.F4, N.A4], [N.E4, N.G4, N.B4], [N.C4, N.E4, N.G4],
+      [N.G4, N.B4, N.D5], [N.B3, N.D4, N.F4], [N.C4, N.E4, N.G4], [N.G4, N.B4, N.D5]
+    ],
+    melodyA: [N.B4, N.D5, N.G5, N.OFF, N.F5, N.E5, N.D5, N.OFF, N.C5, N.E5, N.G5, N.B5, N.A5, N.OFF, N.G5, N.OFF],
+    melodyB: [N.D5, N.G5, N.B5, N.D5, N.C5, N.B4, N.A4, N.OFF, N.G4, N.B4, N.D5, N.G5, N.G5, N.OFF, N.OFF, N.OFF],
+    drums: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]
+  },
+
+  // 4. 呼吸太鼓：日本祭典風 A 小調
+  taiko: {
+    bpm: 136,
+    bass:   [N.A3, N.A3, N.E3, N.A3, N.C3, N.D3, N.E3, N.OFF, N.A3, N.A3, N.G3, N.A3, N.C4, N.B3, N.A3, N.OFF],
+    chords: [
+      [N.A4, N.C5, N.E5], [N.C4, N.E4, N.G4], [N.D4, N.F4, N.A4], [N.E4, N.G4, N.B4],
+      [N.A4, N.C5, N.E5], [N.G4, N.B4, N.D5], [N.F4, N.A4, N.C5], [N.E4, N.G4, N.B4]
+    ],
+    melodyA: [N.A5, N.A5, N.C5, N.E5, N.D5, N.C5, N.A4, N.OFF, N.C5, N.D5, N.E5, N.G5, N.E5, N.OFF, N.A5, N.OFF],
+    melodyB: [N.E5, N.G5, N.A5, N.A5, N.G5, N.E5, N.D5, N.C5, N.D5, N.E5, N.A5, N.G5, N.A5, N.OFF, N.OFF, N.OFF],
+    drums: [1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1]
+  }
+};
+
+// --- 自動音樂排程與合成器 ---
 function scheduler() {
   if (!audioCtx || audioCtx.state !== "running") return;
-  while (nextNoteTime < audioCtx.currentTime + 0.1) {
-    playBGMLoopStep();
+  while (nextBeatTime < audioCtx.currentTime + 0.1) {
+    playBeat(nextBeatTime);
   }
 }
 
-function playBGMLoopStep() {
-  const p = MUSIC_PATTERNS[currentBGM] || MUSIC_PATTERNS.hub;
-  const freq = p.notes[bgmStep % p.notes.length];
-  const secondsPerBeat = 60.0 / p.bpm;
+function playBeat(time) {
+  const track = TRACKS[currentTrack] || TRACKS.hub;
+  const secondsPerBeat = 60.0 / track.bpm / 2; // 16分音符進度
+  const step = beatIndex % 16;
+  const isChorus = (Math.floor(beatIndex / 16) % 2) === 1; // 偶數段主歌(A)，奇數段副歌(B)
 
-  // 播放單個樂音 (柔和背景樂)
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = p.type;
-  osc.frequency.setValueAtTime(freq, nextNoteTime);
-  
-  // 主選單背景音量保持輕柔
-  const vol = currentBGM === "hub" ? 0.04 : 0.06;
-  gain.gain.setValueAtTime(vol, nextNoteTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, nextNoteTime + secondsPerBeat * 0.8);
+  // 1. Bass 樂器 (低音 Sawtooth + 低通濾波)
+  const bassFreq = track.bass[step];
+  if (bassFreq > 0) {
+    const osc = audioCtx.createOscillator();
+    const filter = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(bassFreq, time);
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(350, time);
+    gain.gain.setValueAtTime(0.08, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + secondsPerBeat * 1.2);
+    osc.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(time); osc.stop(time + secondsPerBeat * 1.2);
+  }
 
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
+  // 2. Chords 樂器 (和弦 - 每 2 個 Step 切換和弦)
+  if (step % 2 === 0) {
+    const chordIndex = Math.floor(step / 2) % track.chords.length;
+    const chordNotes = track.chords[chordIndex];
+    chordNotes.forEach(f => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(f, time);
+      gain.gain.setValueAtTime(0.03, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + secondsPerBeat * 1.8);
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start(time); osc.stop(time + secondsPerBeat * 1.8);
+    });
+  }
 
-  osc.start(nextNoteTime);
-  osc.stop(nextNoteTime + secondsPerBeat * 0.8);
+  // 3. Melody 樂器 (主音旋律 - 主歌 A / 副歌 B 自動切換)
+  const melodyArr = isChorus ? track.melodyB : track.melodyA;
+  const melFreq = melodyArr[step];
+  if (melFreq > 0) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = isChorus ? "square" : "sine"; // 副歌切換亮麗方波
+    osc.frequency.setValueAtTime(melFreq, time);
+    gain.gain.setValueAtTime(isChorus ? 0.05 : 0.04, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + secondsPerBeat * 1.5);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(time); osc.stop(time + secondsPerBeat * 1.5);
+  }
 
-  nextNoteTime += secondsPerBeat * 0.5; // 每半拍切換
-  bgmStep++;
+  // 4. Drum 節奏拍子
+  if (track.drums[step] === 1) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(120, time);
+    osc.frequency.exponentialRampToValueAtTime(30, time + 0.08);
+    gain.gain.setValueAtTime(0.12, time);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.08);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(time); osc.stop(time + 0.08);
+  }
+
+  nextBeatTime += secondsPerBeat;
+  beatIndex++;
 }
 
 setInterval(scheduler, 25);
@@ -189,9 +285,9 @@ const SFX = {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(600, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.05);
-    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+    osc.frequency.setValueAtTime(700, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(250, audioCtx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
     gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
     osc.connect(gain); gain.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.05);
@@ -202,7 +298,7 @@ const SFX = {
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = isExhale ? "triangle" : "sine";
-    const freq = isExhale ? 180 + Math.min(flow, 150) * 1.5 : 300 + Math.min(flow, 150) * 2;
+    const freq = isExhale ? 200 + Math.min(flow, 150) * 1.8 : 320 + Math.min(flow, 150) * 2.2;
     osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
     gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
     gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
@@ -218,10 +314,10 @@ const SFX = {
       osc.type = "sine";
       osc.frequency.setValueAtTime(f, audioCtx.currentTime + i * 0.08);
       gain.gain.setValueAtTime(0.15, audioCtx.currentTime + i * 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.08 + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.08 + 0.35);
       osc.connect(gain); gain.connect(audioCtx.destination);
       osc.start(audioCtx.currentTime + i * 0.08);
-      osc.stop(audioCtx.currentTime + i * 0.08 + 0.3);
+      osc.stop(audioCtx.currentTime + i * 0.08 + 0.35);
     });
   }
 };
@@ -360,8 +456,8 @@ function startGame(id){
   SFX.click();
   current = GAMES[id]; if(!current) return;
   currentId = id;
-  currentBGM = id; // 切換至該遊戲專屬音樂
-  bgmStep = 0;
+  currentTrack = id; // 切換音樂軌道
+  beatIndex = 0;
   hub.style.display="none"; bottom.classList.remove("hide");
   if(current.reset) current.reset(api);
   primary.textContent = current.primaryLabel? (current.primaryLabel()||"") : "";
@@ -374,8 +470,8 @@ function startGame(id){
 function toHub(){
   SFX.click();
   current=null; currentId=null;
-  currentBGM = "hub"; // 切換回主選單音樂
-  bgmStep = 0;
+  currentTrack = "hub"; // 切換回主選單音樂
+  beatIndex = 0;
   hub.style.display="flex"; bottom.classList.add("hide");
   segActive=false; segSamples=[];
 }
