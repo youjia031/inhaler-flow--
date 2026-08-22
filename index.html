@@ -47,12 +47,20 @@
   .c3{background:linear-gradient(160deg,#ffb0b0,#ff7a6a);}
   #bottom{margin-top:auto;}
   #bottom.hide{display:none;}
-  /* 上傳狀態小提示 */
   #syncStatus{font-size:12px;color:var(--dim);opacity:.85;}
   #syncStatus.err{color:var(--red-br);}
+  
+  /* 音訊解鎖提示提示 Overlay */
+  #audioHint {
+    position: fixed; bottom: 15px; right: 15px; background: rgba(0,0,0,0.7);
+    color: var(--gold); padding: 8px 16px; border-radius: 20px; font-size: 13px;
+    pointer-events: none; z-index: 999; transition: opacity 0.5s;
+  }
 </style>
 </head>
 <body>
+<div id="audioHint">🎵 點擊任意處開啟音樂與音效</div>
+
 <div id="app">
   <div class="bar top">
     <button id="connectBtn" class="btn-gold btn-md">連接裝置</button>
@@ -104,127 +112,117 @@ import taiko from "./game_taiko.js";
 const GAMES = { angrybird, balloon, taiko };
 const ONSET = 12;
 
-// ---------- 顏色(給遊戲用) ----------
 const COLORS = { bg:"#43111a", panel:"#5c1a26", header:"#370d14", track:"#2c0910",
   gold:"#ffd24a", goldDk:"#b8862a", red:"#e6402f", redBr:"#ff6a52",
   cream:"#fff3df", green:"#7fe08d", blue:"#5fb0ff", dim:"#e0b58f" };
 
 // =====================================================================
-//  音效引擎 (Web Audio API - 純程式碼合成，免載入外檔)
+//  Web Audio 音樂 (BGM) & 音效 (SFX) 引擎
 // =====================================================================
 let audioCtx = null;
+let currentBGM = "hub"; // "hub", "angrybird", "balloon", "taiko"
+let bgmStep = 0;
+let nextNoteTime = 0;
 
-function initAudio() {
+function ensureAudio() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
   if (audioCtx.state === "suspended") {
     audioCtx.resume();
   }
+  const hint = document.getElementById("audioHint");
+  if (hint) hint.style.opacity = "0";
 }
 
-// 點擊UI時啟用 AudioContext
-window.addEventListener("click", initAudio, { once: true });
-window.addEventListener("keydown", initAudio, { once: true });
+window.addEventListener("click", ensureAudio);
+window.addEventListener("keydown", ensureAudio);
 
+// --- 和弦與旋律設定 ---
+const MUSIC_PATTERNS = {
+  hub: { bpm: 100, notes: [261.63, 329.63, 392.00, 523.25, 392.00, 329.63], type: "sine" },         // 溫和 C大調 (選單)
+  angrybird: { bpm: 125, notes: [146.83, 174.61, 220.00, 293.66, 220.00, 174.61], type: "triangle" }, // 緊張 D小調 (彈弓鳥)
+  balloon: { bpm: 90, notes: [196.00, 246.94, 293.66, 392.00, 329.63, 246.94], type: "sine" },      // 舒緩 G大調 (吹氣球)
+  taiko: { bpm: 135, notes: [220.00, 261.63, 329.63, 440.00, 329.63, 261.63], type: "square" }       // 節奏 A小調 (太鼓)
+};
+
+// --- 自動音樂循環與排程器 ---
+function scheduler() {
+  if (!audioCtx || audioCtx.state !== "running") return;
+  while (nextNoteTime < audioCtx.currentTime + 0.1) {
+    playBGMLoopStep();
+  }
+}
+
+function playBGMLoopStep() {
+  const p = MUSIC_PATTERNS[currentBGM] || MUSIC_PATTERNS.hub;
+  const freq = p.notes[bgmStep % p.notes.length];
+  const secondsPerBeat = 60.0 / p.bpm;
+
+  // 播放單個樂音 (柔和背景樂)
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = p.type;
+  osc.frequency.setValueAtTime(freq, nextNoteTime);
+  
+  // 主選單背景音量保持輕柔
+  const vol = currentBGM === "hub" ? 0.04 : 0.06;
+  gain.gain.setValueAtTime(vol, nextNoteTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, nextNoteTime + secondsPerBeat * 0.8);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(nextNoteTime);
+  osc.stop(nextNoteTime + secondsPerBeat * 0.8);
+
+  nextNoteTime += secondsPerBeat * 0.5; // 每半拍切換
+  bgmStep++;
+}
+
+setInterval(scheduler, 25);
+
+// --- 操作音效庫 ---
 const SFX = {
-  // 按鈕點擊音效
   click() {
-    if (!audioCtx) return;
+    ensureAudio(); if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = "sine";
     osc.frequency.setValueAtTime(600, audioCtx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.05);
-    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
     gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.05);
     osc.connect(gain); gain.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.05);
   },
-  // 吹錯方向警告音
-  warning() {
-    if (!audioCtx) return;
+
+  breathFeed(flow, isExhale) {
+    ensureAudio(); if (!audioCtx) return;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(180, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.2);
-  },
-  // 彈弓發射聲 (Pitch Down Slide)
-  launch() {
-    if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(120, audioCtx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.3);
-  },
-  // 城牆倒塌/爆破轟鳴聲
-  boom() {
-    if (!audioCtx) return;
-    const bufferSize = audioCtx.sampleRate * 0.5;
-    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1; // 白雜訊
-    const noise = audioCtx.createBufferSource();
-    noise.buffer = buffer;
-    const filter = audioCtx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(300, audioCtx.currentTime);
-    filter.frequency.linearRampToValueAtTime(50, audioCtx.currentTime + 0.5);
-    const gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-    noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
-    noise.start(); noise.stop(audioCtx.currentTime + 0.5);
-  },
-  // 吹氣球連續充氣音 (頻率隨進度 size: 0~1 增加)
-  inflate(progress = 0) {
-    if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(200 + progress * 300, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.08);
+    osc.type = isExhale ? "triangle" : "sine";
+    const freq = isExhale ? 180 + Math.min(flow, 150) * 1.5 : 300 + Math.min(flow, 150) * 2;
+    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
     osc.connect(gain); gain.connect(audioCtx.destination);
     osc.start(); osc.stop(audioCtx.currentTime + 0.08);
   },
-  // 放飛成功/敲鐘叮叮聲 (金屬響亮短音)
+
   victory() {
-    if (!audioCtx) return;
-    const freqs = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
-    freqs.forEach((f, i) => {
+    ensureAudio(); if (!audioCtx) return;
+    [523.25, 659.25, 783.99, 1046.50].forEach((f, i) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(f, audioCtx.currentTime + i * 0.08);
-      gain.gain.setValueAtTime(0.2, audioCtx.currentTime + i * 0.08);
-      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.08 + 0.4);
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime + i * 0.08);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + i * 0.08 + 0.3);
       osc.connect(gain); gain.connect(audioCtx.destination);
       osc.start(audioCtx.currentTime + i * 0.08);
-      osc.stop(audioCtx.currentTime + i * 0.08 + 0.4);
+      osc.stop(audioCtx.currentTime + i * 0.08 + 0.3);
     });
-  },
-  // 太鼓敲擊聲 (drum)
-  taikoHit(isGreat = true) {
-    if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(isGreat ? 150 : 220, audioCtx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.12);
-    gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.12);
-    osc.connect(gain); gain.connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime + 0.12);
   }
 };
 
@@ -265,7 +263,6 @@ const store = {
 // ---------- 裝置連線 ----------
 let port=null, reader=null, keepReading=false, lastFFT=null, lastTs=0;
 async function connect(){
-  initAudio();
   SFX.click();
   if(port){ await disconnect(); return; }
   if(!("serial" in navigator)){ setStatus("此瀏覽器不支援 Web Serial,請用 Chrome/Edge","warn"); return; }
@@ -293,7 +290,6 @@ async function readLoop(){
 // ---------- 鍵盤試玩 ----------
 let upDown=false, dnDown=false, upFlow=0, dnFlow=0;
 addEventListener("keydown", e=>{
-  initAudio();
   if(e.key==="ArrowUp"){upDown=true;e.preventDefault();}
   if(e.key==="ArrowDown"){dnDown=true;e.preventDefault();}
   if(e.code==="Space"){ onPrimary(); e.preventDefault(); }
@@ -361,10 +357,11 @@ const api = { colors:COLORS, store, ONSET,
 // ---------- 遊戲切換 ----------
 let current=null, currentId=null;
 function startGame(id){
-  initAudio();
   SFX.click();
   current = GAMES[id]; if(!current) return;
   currentId = id;
+  currentBGM = id; // 切換至該遊戲專屬音樂
+  bgmStep = 0;
   hub.style.display="none"; bottom.classList.remove("hide");
   if(current.reset) current.reset(api);
   primary.textContent = current.primaryLabel? (current.primaryLabel()||"") : "";
@@ -375,14 +372,15 @@ function startGame(id){
 }
 
 function toHub(){
-  initAudio();
   SFX.click();
-  current=null; currentId=null; hub.style.display="flex"; bottom.classList.add("hide");
+  current=null; currentId=null;
+  currentBGM = "hub"; // 切換回主選單音樂
+  bgmStep = 0;
+  hub.style.display="flex"; bottom.classList.add("hide");
   segActive=false; segSamples=[];
 }
 
 function onPrimary(){
-  initAudio();
   SFX.click();
   if(current && current.primary){ current.primary(api);
   if(current.primaryLabel){ const t=current.primaryLabel()||""; primary.textContent=t;
@@ -417,60 +415,19 @@ function handleSegment(input){
     if(duration>=SEG_MIN_DURATION && segSamples.length>0){
       uploadLog({ type:"attempt", game:currentId, duration:+duration.toFixed(2),
         series: downsample(segSamples, SEG_MAX_POINTS) });
+      SFX.victory();
     }
     segSamples=[];
   }
 }
 
-// =====================================================================
-//  音效監聽器：不用改動遊戲邏輯檔，直接在此捕捉狀態發聲
-// =====================================================================
-let prevGameState = {};
-let lastInflateTime = 0;
-
-function handleGameAudio(now, input) {
-  if (!current) return;
-
-  // 1. 方向錯誤警告聲 (共通)
-  // 如果子遊戲標示了 wrong 狀態
-  if (window.S && window.S.wrong && !prevGameState.wrong) {
-    SFX.warning();
-  }
-
-  // 2. 彈弓鳥音效
-  if (currentId === "angrybird" && window.S) {
-    if (window.S.phase === "flight" && prevGameState.phase === "aim") {
-      SFX.launch(); // 發射音效
-    }
-    if (window.S.wallBroken && !prevGameState.wallBroken) {
-      SFX.boom();   // 牆壁撞倒爆破音
-      SFX.victory();
-    }
-  }
-
-  // 3. 吹氣球音效
-  if (currentId === "balloon" && window.S) {
-    if (input.active && input.direction === "exhalation" && !window.S.flew) {
-      if (now - lastInflateTime > 0.1) {
-        SFX.inflate(window.S.size || 0); // 氣球充氣聲
-        lastInflateTime = now;
-      }
-    }
-    if (window.S.flew && !prevGameState.flew) {
-      SFX.victory(); // 放飛成功
-    }
-  }
-
-  // 4. 太鼓節奏音效
-  if (currentId === "taiko" && window.S) {
-    if (window.S.flash > 0.8 && (!prevGameState.flash || prevGameState.flash <= 0.8)) {
-      SFX.taikoHit(true); // 擊中良
-    }
-  }
-
-  // 紀錄前一幀狀態
-  if (window.S) {
-    prevGameState = { ...window.S };
+// ---------- 即時聲音觸發器 ----------
+let lastBreathSoundT = 0;
+function handleBreathAudio(now, input) {
+  if (!current || !input.active) return;
+  if (now - lastBreathSoundT > 0.1) {
+    SFX.breathFeed(input.flow, input.direction === "exhalation");
+    lastBreathSoundT = now;
   }
 }
 
@@ -480,7 +437,7 @@ function loop(){
   const now=performance.now()/1000; let dt=Math.min(now-last,0.1); last=now;
   const input=sample(now,dt);
   handleSegment(input);
-  handleGameAudio(now, input); // 播放對應音效
+  handleBreathAudio(now, input);
 
   const w=cv.clientWidth, h=cv.clientHeight;
   if(current){
